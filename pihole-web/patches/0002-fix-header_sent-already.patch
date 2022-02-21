@@ -1,0 +1,24 @@
+--- a/scripts/pi-hole/php/api_token.php
++++ b/scripts/pi-hole/php/api_token.php
+@@ -1,3 +1,8 @@
++<?php
++require "auth.php";
++require "password.php";
++check_cors();
++?>
+ <html>
+ <head>
+ <style>
+@@ -23,11 +28,8 @@ body {
+ </style>
+ </head>
+ <body>
+-<?php
+-require "auth.php";
+-require "password.php";
+-check_cors();
+ 
++<?php
+ if($auth) {
+   if(strlen($pwhash) > 0) {
+     echo '<div class="qrcode">';

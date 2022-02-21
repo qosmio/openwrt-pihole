@@ -1,0 +1,24 @@
+{
+	"user": "http",
+	"access": {
+		"luci-rpc": {
+			"methods": [ "getDHCPLeases" ]
+		},
+		"uci": {
+			"methods": [
+				"get",
+				"add",
+				"set",
+				"commit",
+				"changes",
+				"revert",
+				"apply"
+			]
+		},
+		"file": {
+			"methods": [
+				"exec"
+			]
+		}
+	}
+}

@@ -1,0 +1,417 @@
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -20,6 +20,23 @@ endif()
+ # Put runtime output, i.e. pihole-FTL, in the root of the build dir
+ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR})
+ 
++option(USE_READLINE "Compile with readline support" OFF)
++option(SHARED_SQLITE "Compile with builtin sqlite3" OFF)
++option(CONNTRACK_SUPPORT "Compile with conntrack support" OFF)
++if(CONNTRACK_SUPPORT)
++    add_definitions(-DCONNTRACK_SUPPORT)
++endif()
++
++option(IPSET_SUPPORT "Compile with ipset support" OFF)
++if(IPSET_SUPPORT)
++    add_definitions(-DIPSET_SUPPORT)
++endif()
++
++option(USE_LIBIDN2 "Use idn2 instead of idn" OFF)
++if(USE_LIBIDN2)
++    add_definitions(-DUSE_LIBIDN2)
++endif()
++
+ # SQLITE_OMIT_LOAD_EXTENSION: This option omits the entire extension loading mechanism from SQLite, including sqlite3_enable_load_extension() and sqlite3_load_extension() interfaces. (needs -ldl linking option, otherwise)
+ # SQLITE_DEFAULT_MEMSTATUS=0: This setting causes the sqlite3_status() interfaces that track memory usage to be disabled. This helps the sqlite3_malloc() routines run much faster, and since SQLite uses sqlite3_malloc() internally, this helps to make the entire library faster.
+ # SQLITE_OMIT_DEPRECATED: Omitting deprecated interfaces and features will not help SQLite to run any faster. It will reduce the library footprint, however. And it is the right thing to do.
+@@ -29,7 +46,7 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${PRO
+ # SQLITE_ENABLE_DBPAGE_VTAB: Enables the SQLITE_DBPAGE virtual table. Warning: writing to the SQLITE_DBPAGE virtual table can very easily cause unrecoverably database corruption.
+ # SQLITE_OMIT_DESERIALIZE: This option causes the the sqlite3_serialize() and sqlite3_deserialize() interfaces to be omitted from the build (was the default before 3.36.0)
+ # HAVE_READLINE: Enable readline support to allow easy editing, history and auto-completion
+-set(SQLITE_DEFINES "-DSQLITE_OMIT_LOAD_EXTENSION -DSQLITE_DEFAULT_MEMSTATUS=0 -DSQLITE_OMIT_DEPRECATED -DSQLITE_OMIT_PROGRESS_CALLBACK -DSQLITE_DEFAULT_FOREIGN_KEYS=1 -DSQLITE_DQS=0 -DSQLITE_ENABLE_DBPAGE_VTAB -DSQLITE_OMIT_DESERIALIZE -DHAVE_READLINE")
++set(SQLITE_DEFINES "-DSQLITE_OMIT_LOAD_EXTENSION -DSQLITE_DEFAULT_MEMSTATUS=0 -DSQLITE_OMIT_DEPRECATED -DSQLITE_OMIT_PROGRESS_CALLBACK -DSQLITE_DEFAULT_FOREIGN_KEYS=1 -DSQLITE_DQS=0 -DSQLITE_ENABLE_DBPAGE_VTAB -DSQLITE_OMIT_DESERIALIZE")
+ 
+ # Code hardening and debugging improvements
+ # -fstack-protector-strong: The program will be resistant to having its stack overflowed
+@@ -97,7 +114,7 @@ set(HARDENING_FLAGS "${HARDENING_FLAGS}
+ 
+ # -FILE_OFFSET_BITS=64: used by stat(). Avoids problems with files > 2 GB on 32bit machines
+ # We define HAVE_POLL_H as this is needed for the musl builds to succeed
+-set(CMAKE_C_FLAGS "-pipe ${WARN_FLAGS} -D_FILE_OFFSET_BITS=64 ${HARDENING_FLAGS} ${DEBUG_FLAGS} ${CMAKE_C_FLAGS} -DHAVE_POLL_H ${SQLITE_DEFINES}")
++set(CMAKE_C_FLAGS "${WARN_FLAGS} -D_FILE_OFFSET_BITS=64 ${HARDENING_FLAGS} ${DEBUG_FLAGS} ${CMAKE_C_FLAGS} -DHAVE_POLL_H ${SQLITE_DEFINES}")
+ 
+ set(CMAKE_C_FLAGS_DEBUG "-O0 -g3")
+ set(CMAKE_C_FLAGS_RELEASE "-O3 -DNDEBUG")
+@@ -182,9 +199,19 @@ add_executable(pihole-FTL
+         $<TARGET_OBJECTS:syscalls>
+         )
+ if(STATIC STREQUAL "true")
++    set(SHARED_SQLITE OFF)
+     set_target_properties(pihole-FTL PROPERTIES LINK_SEARCH_START_STATIC ON)
+     set_target_properties(pihole-FTL PROPERTIES LINK_SEARCH_END_STATIC ON)
+-    target_link_libraries(pihole-FTL -static-libgcc -static -pie)
++    find_library(LIBMNL mnl)
++    target_link_libraries(pihole-FTL -static-libgcc -static -pie -lgcc_eh ${LIBMNL})
++if(USE_LIBIDN2)
++    find_library(LIBUNISTRING unistring)
++    target_link_libraries(pihole-FTL ${LIBUNISTRING})
++endif()
++if(USE_READLINE)
++    find_library(LIBNCURSESW ncursesw)
++    target_link_libraries(pihole-FTL ${LIBNCURSESW})
++endif()
+ else()
+     find_library(LIBMATH m)
+     target_link_libraries(pihole-FTL ${LIBMATH})
+@@ -194,45 +221,69 @@ set(THREADS_PREFER_PTHREAD_FLAG TRUE)
+ find_package(Threads REQUIRED)
+ 
+ # for DNSSEC we need the nettle (+ hogweed) crypto and the gmp math libraries
+-find_library(LIBHOGWEED NAMES libhogweed${CMAKE_STATIC_LIBRARY_SUFFIX} hogweed)
+-find_library(LIBGMP NAMES libgmp${CMAKE_STATIC_LIBRARY_SUFFIX} gmp)
+-find_library(LIBNETTLE NAMES libnettle${CMAKE_STATIC_LIBRARY_SUFFIX} nettle)
+-find_library(LIBIDN NAMES libidn${CMAKE_STATIC_LIBRARY_SUFFIX} idn)
++find_library(LIBHOGWEED hogweed)
++find_library(LIBGMP gmp)
++find_library(LIBNETTLE nettle)
++if(USE_LIBIDN2)
++    find_library(LIBIDN idn2)
++else()
++    find_library(LIBIDN idn)
++endif()
++
++if(SHARED_SQLITE)
++    add_definitions(-DSHARED_SQLITE)
++endif()
+ 
+ target_link_libraries(pihole-FTL rt Threads::Threads ${LIBHOGWEED} ${LIBGMP} ${LIBNETTLE} ${LIBIDN})
+ 
++if(CONNTRACK_SUPPORT)
++    find_library(LIBNETFILTER_CONNTRACK netfilter_conntrack)
++    find_library(LIBNFNETLINK nfnetlink)
++    target_link_libraries(pihole-FTL ${LIBNETFILTER_CONNTRACK} ${LIBNFNETLINK})
++endif()
++
+ if(LUA_DL STREQUAL "true")
+     find_library(LIBDL dl)
+     target_link_libraries(pihole-FTL ${LIBDL})
+ endif()
+ 
+-find_library(LIBREADLINE NAMES libreadline${CMAKE_STATIC_LIBRARY_SUFFIX} readline)
+-find_library(LIBHISTORY NAMES libhistory${CMAKE_STATIC_LIBRARY_SUFFIX} history)
+-find_library(LIBTERMCAP NAMES libtermcap${CMAKE_STATIC_LIBRARY_SUFFIX} termcap)
+-if(LIBREADLINE AND LIBHISTORY AND LIBTERMCAP)
+-    message(STATUS "Building FTL with readline support: YES")
+-    target_compile_definitions(FTL PRIVATE LUA_USE_READLINE)
+-    target_compile_definitions(pihole-FTL PRIVATE LUA_USE_READLINE)
+-    target_link_libraries(pihole-FTL ${LIBREADLINE} ${LIBHISTORY} ${LIBTERMCAP})
+-else()
+-    message(STATUS "Building FTL with readline support: NO")
+-endif()
+-
+ find_library(LIBUCI uci)
+ if(NOT LIBUCI)
+     message(FATAL_ERROR "libuci not found")
+ endif()
+ target_link_libraries(pihole-FTL ${LIBUCI})
+ 
++find_library(LIBUBOX ubox)
++find_library(LIBUBUS ubus)
++if(NOT LIBUBOX OR NOT LIBUBUS)
++    message(FATAL_ERROR "libubus and libubox are required")
++endif()
++target_link_libraries(pihole-FTL ${LIBUBOX} ${LIBUBUS})
++
++if(USE_READLINE)
++    find_library(LIBREADLINE readline)
++    if(LIBREADLINE)
++        message(STATUS "Building FTL with readline support: YES")
++        target_compile_definitions(FTL PRIVATE LUA_USE_READLINE)
++        target_compile_definitions(pihole-FTL PRIVATE LUA_USE_READLINE)
++        target_link_libraries(pihole-FTL ${LIBREADLINE})
++    else()
++        message(STATUS "Building FTL with readline support: NO")
++    endif()
++endif()
++
++if(SHARED_SQLITE)
++    find_library(LIBSQLITE sqlite3)
++    target_link_libraries(pihole-FTL ${LIBSQLITE})
++endif()
++
+ if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
+     set(CMAKE_INSTALL_PREFIX "/usr" CACHE PATH "..." FORCE)
+ endif()
+ 
+-find_program(SETCAP setcap)
+ install(TARGETS pihole-FTL
+         RUNTIME DESTINATION bin
+         PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
+-install(CODE "execute_process(COMMAND ${SETCAP} CAP_NET_BIND_SERVICE,CAP_NET_RAW,CAP_NET_ADMIN,CAP_SYS_NICE+eip \$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/bin/pihole-FTL)")
+ 
+ add_subdirectory(api)
+ add_subdirectory(database)
+--- a/src/args.c
++++ b/src/args.c
+@@ -244,9 +244,13 @@ void parse_args(int argc, char* argv[])
+ 			print_dnsmasq_version();
+ 
+ 			// Print SQLite3 version and compile time options
++#ifndef SHARED_SQLITE
+ 			printf("****************************** SQLite3 ******************************\n");
++#else
++			printf("************************** Shared SQLite3 ***************************\n");
++#endif
+ 			printf("Version:         %s\n", sqlite3_libversion());
+-			printf("Compile options: ");
++			printf("SQLite3 options: ");
+ 			unsigned int o = 0;
+ 			const char *opt = NULL;
+ 			while((opt = sqlite3_compileoption_get(o++)) != NULL)
+@@ -255,7 +259,7 @@ void parse_args(int argc, char* argv[])
+ 					printf(" ");
+ 				printf("%s", opt);
+ 			}
+-			printf("\n");
++			printf("\n\n");
+ 			printf("******************************** LUA ********************************\n");
+ 			printf(LUA_COPYRIGHT"\n");
+ 			exit(EXIT_SUCCESS);
+--- a/src/database/CMakeLists.txt
++++ b/src/database/CMakeLists.txt
+@@ -13,13 +13,23 @@
+ # headers in the build command and thus does not need to be rebuilt when headers
+ # are modified.
+ set(sqlite3_sources
+-        shell.c
+-        sqlite3.c
+-        )
++    shell.c
++    )
++
++if(NOT SHARED_SQLITE)
++    list(APPEND sqlite3_sources sqlite3.c)
++endif()
+ 
+ add_library(sqlite3 OBJECT ${sqlite3_sources})
+ target_compile_options(sqlite3 PRIVATE -Wno-implicit-fallthrough -Wno-cast-function-type)
+ 
++if(USE_READLINE)
++    message(STATUS "Embedded SQLITE3 will use readline for history: YES")
++    target_compile_definitions(sqlite3 PRIVATE HAVE_READLINE)
++else()
++    message(STATUS "Embedded SQLITE3 will use readline for history: NO")
++endif()
++
+ set(database_sources
+         common.c
+         common.h
+@@ -33,13 +43,16 @@ set(database_sources
+         network-table.h
+         query-table.c
+         query-table.h
+-        sqlite3.h
+         sqlite3-ext.c
+         sqlite3-ext.h
+         aliasclients.c
+         aliasclients.h
+         )
+ 
++if(NOT SHARED_SQLITE)
++    list(APPEND database_sources sqlite3.h)
++endif()
++
+ add_library(database OBJECT ${database_sources})
+ target_compile_options(database PRIVATE "${EXTRAWARN}")
+ target_include_directories(database PRIVATE ${PROJECT_SOURCE_DIR}/src)
+--- a/src/database/common.h
++++ b/src/database/common.h
+@@ -10,7 +10,11 @@
+ #ifndef DATABASE_COMMON_H
+ #define DATABASE_COMMON_H
+ 
++#ifndef SHARED_SQLITE
+ #include "sqlite3.h"
++#else
++#include <sqlite3.h>
++#endif
+ 
+ // Database table "ftl"
+ enum ftl_table_props {
+--- a/src/database/gravity-db.c
++++ b/src/database/gravity-db.c
+@@ -9,7 +9,11 @@
+ *  Please see LICENSE file for your rights under this license. */
+ 
+ #include "../FTL.h"
++#ifndef SHARED_SQLITE
+ #include "sqlite3.h"
++#else
++#include <sqlite3.h>
++#endif
+ #include "gravity-db.h"
+ // struct config
+ #include "../config.h"
+--- a/src/database/network-table.h
++++ b/src/database/network-table.h
+@@ -10,7 +10,11 @@
+ #ifndef NETWORKTABLE_H
+ #define NETWORKTABLE_H
+ 
++#ifndef SHARED_SQLITE
+ #include "sqlite3.h"
++#else
++#include <sqlite3.h>
++#endif
+ 
+ bool create_network_table(sqlite3 *db);
+ bool create_network_addresses_table(sqlite3 *db);
+--- a/src/database/query-table.h
++++ b/src/database/query-table.h
+@@ -10,7 +10,11 @@
+ #ifndef DATABASE_QUERY_TABLE_H
+ #define DATABASE_QUERY_TABLE_H
+ 
++#ifndef SHARED_SQLITE
+ #include "sqlite3.h"
++#else
++#include <sqlite3.h>
++#endif
+ 
+ int get_number_of_queries_in_DB(sqlite3 *db);
+ void delete_old_queries_in_DB(sqlite3 *db);
+--- a/src/database/shell.c
++++ b/src/database/shell.c
+@@ -98,7 +98,11 @@
+ #include <string.h>
+ #include <stdio.h>
+ #include <assert.h>
++#ifndef SHARED_SQLITE
+ #include "sqlite3.h"
++#else
++#include <sqlite3.h>
++#endif
+ typedef sqlite3_int64 i64;
+ typedef sqlite3_uint64 u64;
+ typedef unsigned char u8;
+@@ -22819,7 +22823,7 @@ int SQLITE_CDECL wmain(int argc, wchar_t
+       }else if( (zHome = find_home_dir(0))!=0 ){
+         nHistory = strlen30(zHome) + 20;
+         if( (zHistory = malloc(nHistory))!=0 ){
+-          sqlite3_snprintf(nHistory, zHistory,"%s/.sqlite_history", zHome);
++          sqlite3_snprintf(nHistory, zHistory,"%s/.FTL_sqlite_history", zHome);
+         }
+       }
+       if( zHistory ){ shell_read_history(zHistory); }
+--- a/src/datastructure.h
++++ b/src/datastructure.h
+@@ -11,7 +11,11 @@
+ #define DATASTRUCTURE_H
+ 
+ // Definition of sqlite3_stmt
++#ifndef SHARED_SQLITE
+ #include "database/sqlite3.h"
++#else
++#include <sqlite3.h>
++#endif
+ 
+ // enum privacy_level
+ #include "enums.h"
+--- a/src/dnsmasq/dnsmasq.h
++++ b/src/dnsmasq/dnsmasq.h
+@@ -17,7 +17,18 @@
+ /* Pi-hole definitions */
+ #define HAVE_DNSSEC
+ #define HAVE_DNSSEC_STATIC
++#ifdef USE_LIBIDN2
++#define HAVE_LIBIDN2
++#else
+ #define HAVE_IDN
++#endif
++#ifdef CONNTRACK_SUPPORT
++#define HAVE_CONNTRACK
++#endif
++#ifndef IPSET_SUPPORT
++#define NO_IPSET
++#endif
++#define HAVE_UBUS
+ #define HAVE_LUASCRIPT
+ /***********************/
+ 
+--- a/src/log.c
++++ b/src/log.c
+@@ -25,6 +25,9 @@
+ // logg_fatal_dnsmasq_message()
+ #include "database/message-table.h"
+ 
++#ifdef SHARED_SQLITE
++extern const char *get_sqlite3_version(void);
++#endif
+ static bool print_log = true, print_stdout = true;
+ 
+ void log_ctrl(bool plog, bool pstdout)
+@@ -274,6 +277,9 @@ void log_counter_info(void)
+ 
+ void log_FTL_version(const bool crashreport)
+ {
++#ifdef SHARED_SQLITE
++	logg("Using system libsqlite3: %s", get_sqlite3_version());
++#endif
+ 	logg("FTL branch: %s", FTL_BRANCH);
+ 	logg("FTL version: %s", FTL_VERSION);
+ 	logg("FTL build date: %s", FTL_DATE);
+--- a/src/lua/CMakeLists.txt
++++ b/src/lua/CMakeLists.txt
+@@ -77,7 +77,7 @@ if(LUA_DL STREQUAL "true")
+     target_compile_definitions(lua PRIVATE LUA_USE_DLOPEN)
+ endif()
+ 
+-if(LIBREADLINE AND LIBHISTORY AND LIBTERMCAP)
++if(USE_READLINE)
+     message(STATUS "Embedded LUA will use readline for history: YES")
+     target_compile_definitions(lua PRIVATE LUA_USE_READLINE)
+ else()
+--- a/src/lua/ftl_lua.c
++++ b/src/lua/ftl_lua.c
+@@ -13,7 +13,9 @@
+ // struct luaL_Reg
+ #include "lauxlib.h"
+ #include "../version.h"
++#if defined(LUA_USE_READLINE)
+ #include <readline/history.h>
++#endif
+ #include <wordexp.h>
+ 
+ int run_lua_interpreter(const int argc, char **argv, bool dnsmasq_debug)
+--- a/src/lua/ftl_lua.h
++++ b/src/lua/ftl_lua.h
+@@ -13,7 +13,7 @@
+ #include "lua.h"
+ #include <stdbool.h>
+ 
+-#define LUA_HISTORY_FILE "~/.pihole_lua_history"
++#define LUA_HISTORY_FILE "~/.FTL_lua_history"
+ 
+ int run_lua_interpreter(const int argc, char **argv, bool dnsmasq_debug);
+ int run_luac(const int argc, char **argv);
+@@ -25,4 +25,4 @@ extern int dolibrary (lua_State *L, cons
+ 
+ void ftl_lua_init(lua_State *L);
+ 
+-#endif //FTL_LUA_H
+\ No newline at end of file
++#endif //FTL_LUA_H
+--- a/src/vector.h
++++ b/src/vector.h
+@@ -17,7 +17,11 @@
+ // type bool
+ #include <stdbool.h>
+ // type sqlite3_stmt
++#ifndef SHARED_SQLITE
+ #include "database/sqlite3.h"
++#else
++#include <sqlite3.h>
++#endif
+ // assert_sizeof
+ #include "static_assert.h"
+ 

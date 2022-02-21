@@ -1,0 +1,30 @@
+--- a/scripts/pi-hole/php/func.php
++++ b/scripts/pi-hole/php/func.php
+@@ -541,9 +541,24 @@ function getQueryTypeStr($querytype)
+ // Returns an integer representing pihole blocking status
+ function piholeStatus()
+ {
+-    // Receive the return of "pihole status web"
+-    $pistatus = pihole_execute('status web');
+-    return isset($pistatus[0]) ? intval($pistatus[0]) : -2;
++    if(!file_exists("/tmp/run/pihole/FTL.sock") || filesize("/tmp/run/pihole/pihole-FTL.pid") === 0)
++        return -1;
++
++    $blocking_enabled = intval(uci_get("pihole", "@pihole[0]", "blocking_enabled"));
++    if ($blocking_enabled !== 1)
++        return 0;
++
++    $DNSport = uci_get("dhcp", "@dnsmasq[0]", "port");
++    if (isset($DNSport)) {
++        $DNSport = intval($DNSport);
++        if($DNSport === 0) {
++            return -1;
++        } else {
++            return $DNSport;
++        }
++    } else {
++        return 53;
++    }
+ }
+ 
+ // Returns pihole status, using only valid API responses (enabled/disabled)

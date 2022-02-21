@@ -1,0 +1,2006 @@
+--- a/advanced/Scripts/chronometer.sh
++++ b/advanced/Scripts/chronometer.sh
+@@ -14,7 +14,7 @@ LC_NUMERIC=C
+ # Retrieve stats from FTL engine
+ pihole-FTL() {
+     local ftl_port LINE
+-    ftl_port=$(cat /run/pihole-FTL.port 2> /dev/null)
++    ftl_port=$(cat /var/run/pihole/pihole-FTL.port 2> /dev/null)
+     if [[ -n "$ftl_port" ]]; then
+         # Open connection to FTL
+         exec 3<>"/dev/tcp/127.0.0.1/$ftl_port"
+@@ -104,11 +104,11 @@ printFunc() {
+ 
+ # Perform on first Chrono run (not for JSON formatted string)
+ get_init_stats() {
+-    calcFunc(){ awk "BEGIN {print $*}" 2> /dev/null; }
++    calcFunc(){ gawk "BEGIN {print $*}" 2> /dev/null; }
+ 
+     # Convert bytes to human-readable format
+     hrBytes() {
+-        awk '{
++        gawk '{
+             num=$1;
+             if(num==0) {
+                 print "0 B"
+@@ -134,7 +134,7 @@ get_init_stats() {
+     }
+ 
+     # Set Color Codes
+-    coltable="/opt/pihole/COL_TABLE"
++    coltable="/usr/lib/pihole/COL_TABLE"
+     if [[ -f "${coltable}" ]]; then
+         source ${coltable}
+     else
+@@ -158,6 +158,7 @@ get_init_stats() {
+         # Active Throttle Notice: https://bit.ly/2gnunOo
+         if [[ "$sys_throttle_raw" != "0" ]]; then
+             case "$sys_throttle_raw" in
++                *0000) thr_type="${COL_LIGHT_GREEN}No Throttle ${COL_YELLOW}0x$sys_throttle_raw";;
+                 *0001) thr_type="${COL_YELLOW}Under Voltage";;
+                 *0002) thr_type="${COL_LIGHT_BLUE}Arm Freq Cap";;
+                 *0003) thr_type="${COL_YELLOW}UV${COL_DARK_GRAY},${COL_NC} ${COL_LIGHT_BLUE}AFC";;
+@@ -169,7 +170,7 @@ get_init_stats() {
+         [[ -n "$thr_type" ]] && sys_throttle="$thr_type${COL_DARK_GRAY}"
+         fi
+ 
+-        sys_rev_raw=$(awk '/Revision/ {print $3}' < /proc/cpuinfo)
++        sys_rev_raw=$(gawk '/Revision/ {print $3}' < /proc/cpuinfo)
+         case "$sys_rev_raw" in
+             000[2-6]) sys_model=" 1, Model B";; # 256MB
+             000[7-9]) sys_model=" 1, Model A";; # 256MB
+@@ -208,11 +209,6 @@ get_init_stats() {
+     else
+         temp_file=""
+     fi
+-
+-    # Test existence of setupVars config
+-    if [[ -f "/etc/pihole/setupVars.conf" ]]; then
+-        setupVars="/etc/pihole/setupVars.conf"
+-    fi
+ }
+ 
+ get_sys_stats() {
+@@ -224,10 +220,7 @@ get_sys_stats() {
+     # Update every 12 refreshes (Def: every 60s)
+     count=$((count+1))
+     if [[ "$count" == "1" ]] || (( "$count" % 12 == 0 )); then
+-        # Do not source setupVars if file does not exist
+-        [[ -n "$setupVars" ]] && source "$setupVars"
+-
+-        mapfile -t ph_ver_raw < <(pihole -v -c 2> /dev/null | sed -n 's/^.* v/v/p')
++        mapfile -t ph_ver_raw < <(pihole -v 2> /dev/null | sed -n 's/^.* v/v/p')
+         if [[ -n "${ph_ver_raw[0]}" ]]; then
+             ph_core_ver="${ph_ver_raw[0]}"
+             if [[ ${#ph_ver_raw[@]} -eq 2 ]]; then
+@@ -242,12 +235,12 @@ get_sys_stats() {
+             ph_core_ver="-1"
+         fi
+ 
+-        sys_name=$(hostname)
++        sys_name=$(uci -q get system.@system[0].hostname)
+ 
+         [[ -n "$TEMPERATUREUNIT" ]] && temp_unit="${TEMPERATUREUNIT^^}" || temp_unit="C"
+ 
+         # Get storage stats for partition mounted on /
+-        read -r -a disk_raw <<< "$(df -B1 / 2> /dev/null | awk 'END{ print $3,$2,$5 }')"
++        read -r -a disk_raw <<< "$(df -B1 / 2> /dev/null | gawk 'END{ print $3,$2,$5 }')"
+         disk_used="${disk_raw[0]}"
+         disk_total="${disk_raw[1]}"
+         disk_perc="${disk_raw[2]}"
+@@ -260,16 +253,7 @@ get_sys_stats() {
+         fi
+ 
+         # Get DNS server count
+-        dns_count="0"
+-        [[ -n "${PIHOLE_DNS_1}" ]] && dns_count=$((dns_count+1))
+-        [[ -n "${PIHOLE_DNS_2}" ]] && dns_count=$((dns_count+1))
+-        [[ -n "${PIHOLE_DNS_3}" ]] && dns_count=$((dns_count+1))
+-        [[ -n "${PIHOLE_DNS_4}" ]] && dns_count=$((dns_count+1))
+-        [[ -n "${PIHOLE_DNS_5}" ]] && dns_count=$((dns_count+1))
+-        [[ -n "${PIHOLE_DNS_6}" ]] && dns_count=$((dns_count+1))
+-        [[ -n "${PIHOLE_DNS_7}" ]] && dns_count=$((dns_count+1))
+-        [[ -n "${PIHOLE_DNS_8}" ]] && dns_count=$((dns_count+1))
+-        [[ -n "${PIHOLE_DNS_9}" ]] && dns_count="$dns_count+"
++        dns_count="$(uci get dhcp.@dnsmasq[0].server | wc -w)"
+     fi
+ 
+     # Get screen size
+@@ -297,16 +281,16 @@ get_sys_stats() {
+ 
+     # Get CPU usage, only counting processes over 1% as active
+     # shellcheck disable=SC2009
+-    cpu_raw=$(ps -eo pcpu,rss --no-headers | grep -E -v "    0")
++    cpu_raw=$(/usr/libexec/ps-procps-ng -eo pcpu,rss --no-headers | grep -E -v "    0")
+     cpu_tasks=$(wc -l <<< "$cpu_raw")
+     cpu_taskact=$(sed -r "/(^ 0.)/d" <<< "$cpu_raw" | wc -l)
+-    cpu_perc=$(awk '{sum+=$1} END {printf "%.0f\n", sum/'"$sys_cores"'}' <<< "$cpu_raw")
++    cpu_perc=$(gawk '{sum+=$1} END {printf "%.0f\n", sum/'"$sys_cores"'}' <<< "$cpu_raw")
+ 
+     # Get CPU clock speed
+     if [[ -n "$scaling_freq_file" ]]; then
+         cpu_mhz=$(( $(< /sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq) / 1000 ))
+     else
+-        cpu_mhz=$(lscpu | awk -F ":" '/MHz/ {print $2;exit}')
++        cpu_mhz=$(lscpu | gawk -F ":" '/MHz/ {print $2;exit}')
+         cpu_mhz=$(printf "%.0f" "${cpu_mhz//[[:space:]]/}")
+     fi
+ 
+@@ -352,7 +336,7 @@ get_sys_stats() {
+         cpu_temp_str=""
+     fi
+ 
+-    read -r -a ram_raw <<< "$(awk '/MemTotal:/{total=$2} /MemFree:/{free=$2} /Buffers:/{buffers=$2} /^Cached:/{cached=$2} END {printf "%.0f %.0f %.0f", (total-free-buffers-cached)*100/total, (total-free-buffers-cached)*1024, total*1024}' /proc/meminfo)"
++    read -r -a ram_raw <<< "$(gawk '/MemTotal:/{total=$2} /MemFree:/{free=$2} /Buffers:/{buffers=$2} /^Cached:/{cached=$2} END {printf "%.0f %.0f %.0f", (total-free-buffers-cached)*100/total, (total-free-buffers-cached)*1024, total*1024}' /proc/meminfo)"
+     ram_perc="${ram_raw[0]}"
+     ram_used="${ram_raw[1]}"
+     ram_total="${ram_raw[2]}"
+--- a/advanced/Scripts/database_migration/gravity-db.sh
++++ b/advanced/Scripts/database_migration/gravity-db.sh
+@@ -10,7 +10,7 @@
+ # This file is copyright under the latest version of the EUPL.
+ # Please see LICENSE file for your rights under this license.
+ 
+-readonly scriptPath="/etc/.pihole/advanced/Scripts/database_migration/gravity"
++readonly scriptPath="/usr/lib/pihole/database_migration/gravity"
+ 
+ upgrade_gravityDB(){
+ 	local database piholeDir auditFile version
+--- a/advanced/Scripts/list.sh
++++ b/advanced/Scripts/list.sh
+@@ -13,15 +13,9 @@
+ # Globals
+ piholeDir="/etc/pihole"
+ GRAVITYDB="${piholeDir}/gravity.db"
+-# Source pihole-FTL from install script
+-pihole_FTL="${piholeDir}/pihole-FTL.conf"
+-if [[ -f "${pihole_FTL}" ]]; then
+-    source "${pihole_FTL}"
+-fi
+-
+-# Set this only after sourcing pihole-FTL.conf as the gravity database path may
+-# have changed
+-gravityDBfile="${GRAVITYDB}"
++
++GDB="$(uci_get pihole @pihole[0] gravitydb)"
++gravityDBfile="${GDB:-$GRAVITYDB}"
+ 
+ noReloadRequested=false
+ addmode=true
+@@ -37,7 +31,7 @@ declare -i domaincount
+ domaincount=0
+ reload=false
+ 
+-colfile="/opt/pihole/COL_TABLE"
++colfile="/usr/lib/pihole/COL_TABLE"
+ source ${colfile}
+ 
+ # IDs are hard-wired to domain interpretation in the gravity database scheme
+--- a/advanced/Scripts/pihole-reenable.sh
++++ b/advanced/Scripts/pihole-reenable.sh
+@@ -17,7 +17,7 @@
+ # This ensures that pihole ends up in the correct state after a sequence of
+ # commands suchs as: `pihole disable 30s; pihole enable; pihole disable`
+ 
+-readonly PI_HOLE_BIN_DIR="/usr/local/bin"
++readonly PI_HOLE_BIN_DIR="/usr/bin"
+ 
+ sleep "${1}"
+ "${PI_HOLE_BIN_DIR}"/pihole enable
+--- a/advanced/Scripts/piholeARPTable.sh
++++ b/advanced/Scripts/piholeARPTable.sh
+@@ -10,25 +10,16 @@
+ # This file is copyright under the latest version of the EUPL.
+ # Please see LICENSE file for your rights under this license.
+ 
+-coltable="/opt/pihole/COL_TABLE"
++coltable="/usr/lib/pihole/COL_TABLE"
+ if [[ -f ${coltable} ]]; then
+     source ${coltable}
+ fi
+ 
+-# Determine database location
+-# Obtain DBFILE=... setting from pihole-FTL.db
+-# Constructed to return nothing when
+-# a) the setting is not present in the config file, or
+-# b) the setting is commented out (e.g. "#DBFILE=...")
+-FTLconf="/etc/pihole/pihole-FTL.conf"
+-if [ -e "$FTLconf" ]; then
+-    DBFILE="$(sed -n -e 's/^\s*DBFILE\s*=\s*//p' ${FTLconf})"
+-fi
+-# Test for empty string. Use standard path in this case.
+-if [ -z "$DBFILE" ]; then
+-    DBFILE="/etc/pihole/pihole-FTL.db"
+-fi
++source /lib/config/uci.sh
+ 
++DBFILE_default="/etc/pihole/pihole-FTL.db"
++DBF="$(uci_get pihole @pihole[0] dbfile)"
++DBFILE="${DBF:-$DBFILE_default}"
+ 
+ flushARP(){
+     local output
+--- a/advanced/Scripts/piholeLogFlush.sh
++++ b/advanced/Scripts/piholeLogFlush.sh
+@@ -8,7 +8,7 @@
+ # This file is copyright under the latest version of the EUPL.
+ # Please see LICENSE file for your rights under this license.
+ 
+-colfile="/opt/pihole/COL_TABLE"
++colfile="/usr/lib/pihole/COL_TABLE"
+ source ${colfile}
+ 
+ # In case we're running at the same time as a system logrotate, use a
+@@ -16,54 +16,35 @@ source ${colfile}
+ # toes.
+ STATEFILE="/var/lib/logrotate/pihole"
+ 
+-# Determine database location
+-# Obtain DBFILE=... setting from pihole-FTL.db
+-# Constructed to return nothing when
+-# a) the setting is not present in the config file, or
+-# b) the setting is commented out (e.g. "#DBFILE=...")
+-FTLconf="/etc/pihole/pihole-FTL.conf"
+-if [ -e "$FTLconf" ]; then
+-    DBFILE="$(sed -n -e 's/^\s*DBFILE\s*=\s*//p' ${FTLconf})"
+-fi
+-# Test for empty string. Use standard path in this case.
+-if [ -z "$DBFILE" ]; then
+-    DBFILE="/etc/pihole/pihole-FTL.db"
+-fi
++source /lib/config/uci.sh
++
++DBFILE_default="/etc/pihole/pihole-FTL.db"
++DBF="$(uci_get pihole @pihole[0] dbfile)"
++DBFILE="${DBF:-$DBFILE_default}"
+ 
+ if [[ "$@" != *"quiet"* ]]; then
+     echo -ne "  ${INFO} Flushing /var/log/pihole.log ..."
+ fi
+ if [[ "$@" == *"once"* ]]; then
+     # Nightly logrotation
+-    if command -v /usr/sbin/logrotate >/dev/null; then
+-        # Logrotate once
+-        /usr/sbin/logrotate --force --state "${STATEFILE}" /etc/pihole/logrotate
+-    else
+-        # Copy pihole.log over to pihole.log.1
+-        # and empty out pihole.log
+-        # Note that moving the file is not an option, as
+-        # dnsmasq would happily continue writing into the
+-        # moved file (it will have the same file handler)
+-        cp -p /var/log/pihole.log /var/log/pihole.log.1
+-        echo " " > /var/log/pihole.log
+-        chmod 644 /var/log/pihole.log
+-    fi
++    # Copy pihole.log over to pihole.log.1
++    # and empty out pihole.log
++    # Note that moving the file is not an option, as
++    # dnsmasq would happily continue writing into the
++    # moved file (it will have the same file handler)
++    cp -p /var/log/pihole.log /var/log/pihole.log.1
++    echo " " > /var/log/pihole.log
++    chmod 644 /var/log/pihole.log
+ else
+     # Manual flushing
+-    if command -v /usr/sbin/logrotate >/dev/null; then
+-        # Logrotate twice to move all data out of sight of FTL
+-        /usr/sbin/logrotate --force --state "${STATEFILE}" /etc/pihole/logrotate; sleep 3
+-        /usr/sbin/logrotate --force --state "${STATEFILE}" /etc/pihole/logrotate
+-    else
+-        # Flush both pihole.log and pihole.log.1 (if existing)
+-        echo " " > /var/log/pihole.log
+-        if [ -f /var/log/pihole.log.1 ]; then
+-            echo " " > /var/log/pihole.log.1
+-            chmod 644 /var/log/pihole.log.1
+-        fi
++    # Flush both pihole.log and pihole.log.1 (if existing)
++    if [ -f /var/log/pihole.log.1 ]; then
++        rm -f /var/log/pihole.log.1
++        cp -p /var/log/pihole.log /var/log/pihole.log.1
+     fi
++    echo " " > /var/log/pihole.log
+     # Delete most recent 24 hours from FTL's database, leave even older data intact (don't wipe out all history)
+-    deleted=$(pihole-FTL sqlite3 "${DBFILE}" "DELETE FROM queries WHERE timestamp >= strftime('%s','now')-86400; select changes() from queries limit 1")
++    # deleted=$(pihole-FTL sqlite3 "${DBFILE}" "DELETE FROM queries WHERE timestamp >= strftime('%s','now')-86400; select changes() from queries limit 1")
+ 
+     # Restart pihole-FTL to force reloading history
+     sudo pihole restartdns
+--- a/advanced/Scripts/query.sh
++++ b/advanced/Scripts/query.sh
+@@ -10,6 +10,7 @@
+ # This file is copyright under the latest version of the EUPL.
+ # Please see LICENSE file for your rights under this license.
+ 
++source /lib/config/uci.sh
+ # Globals
+ piholeDir="/etc/pihole"
+ GRAVITYDB="${piholeDir}/gravity.db"
+@@ -18,17 +19,12 @@ all=""
+ exact=""
+ blockpage=""
+ matchType="match"
+-# Source pihole-FTL from install script
+-pihole_FTL="${piholeDir}/pihole-FTL.conf"
+-if [[ -f "${pihole_FTL}" ]]; then
+-    source "${pihole_FTL}"
+-fi
+ 
+-# Set this only after sourcing pihole-FTL.conf as the gravity database path may
+ # have changed
+-gravityDBfile="${GRAVITYDB}"
++GDB="$(uci_get pihole @pihole[0] gravitydb)"
++gravityDBfile="${GDB:-$GRAVITYDB}"
+ 
+-colfile="/opt/pihole/COL_TABLE"
++colfile="/usr/lib/pihole/COL_TABLE"
+ source "${colfile}"
+ 
+ # Scan an array of files for matching strings
+@@ -83,13 +79,14 @@ fi
+ # Strip valid options, leaving only the domain and invalid options
+ # This allows users to place the options before or after the domain
+ options=$(sed -E 's/ ?-(bp|adlists?|all|exact) ?//g' <<< "${options}")
++idn2=$(command -v idn2)
+ 
+ # Handle remaining options
+ # If $options contain non ASCII characters, convert to punycode
+ case "${options}" in
+     ""             ) str="No domain specified";;
+     *" "*          ) str="Unknown query option specified";;
+-    *[![:ascii:]]* ) domainQuery=$(idn2 "${options}");;
++    *[![:ascii:]]* ) domainQuery=$(${idn2:-idn} "${options}");;
+     *              ) domainQuery="${options}";;
+ esac
+ 
+--- a/advanced/Scripts/version.sh
++++ b/advanced/Scripts/version.sh
+@@ -8,192 +8,37 @@
+ # This file is copyright under the latest version of the EUPL.
+ # Please see LICENSE file for your rights under this license.
+ 
+-# Variables
+-DEFAULT="-1"
+-COREGITDIR="/etc/.pihole/"
+-WEBGITDIR="/var/www/html/admin/"
+-
+-# Source the setupvars config file
+-# shellcheck disable=SC1091
+-source /etc/pihole/setupVars.conf
+-
+-getLocalVersion() {
+-    # FTL requires a different method
+-    if [[ "$1" == "FTL" ]]; then
+-        pihole-FTL version
+-        return 0
+-    fi
+-
+-    # Get the tagged version of the local repository
+-    local directory="${1}"
+-    local version
+-
+-    cd "${directory}" 2> /dev/null || { echo "${DEFAULT}"; return 1; }
+-    version=$(git describe --tags --always || echo "$DEFAULT")
+-    if [[ "${version}" =~ ^v ]]; then
+-        echo "${version}"
+-    elif [[ "${version}" == "${DEFAULT}" ]]; then
+-        echo "ERROR"
+-        return 1
+-    else
+-        echo "Untagged"
+-    fi
+-    return 0
+-}
+-
+-getLocalHash() {
+-    # Local FTL hash does not exist on filesystem
+-    if [[ "$1" == "FTL" ]]; then
+-        echo "N/A"
+-        return 0
+-    fi
+-
+-    # Get the short hash of the local repository
+-    local directory="${1}"
+-    local hash
+-
+-    cd "${directory}" 2> /dev/null || { echo "${DEFAULT}"; return 1; }
+-    hash=$(git rev-parse --short HEAD || echo "$DEFAULT")
+-    if [[ "${hash}" == "${DEFAULT}" ]]; then
+-        echo "ERROR"
+-        return 1
+-    else
+-        echo "${hash}"
+-    fi
+-    return 0
+-}
+-
+-getRemoteHash(){
+-    # Remote FTL hash is not applicable
+-    if [[ "$1" == "FTL" ]]; then
+-        echo "N/A"
+-        return 0
+-    fi
+-
+-    local daemon="${1}"
+-    local branch="${2}"
+-
+-    hash=$(git ls-remote --heads "https://github.com/pi-hole/${daemon}" | \
+-        awk -v bra="$branch" '$0~bra {print substr($0,0,8);exit}')
+-    if [[ -n "$hash" ]]; then
+-        echo "$hash"
+-    else
+-        echo "ERROR"
+-        return 1
+-    fi
+-    return 0
+-}
+-
+-getRemoteVersion(){
+-    # Get the version from the remote origin
+-    local daemon="${1}"
+-    local version
+-    local cachedVersions
+-    local arrCache
+-    cachedVersions="/etc/pihole/GitHubVersions"
+-
+-    #If the above file exists, then we can read from that. Prevents overuse of GitHub API
+-    if [[ -f "$cachedVersions" ]]; then
+-        IFS=' ' read -r -a arrCache < "$cachedVersions"
+-
+-        case $daemon in
+-            "pi-hole"   )  echo "${arrCache[0]}";;
+-            "AdminLTE"  )  [[ "${INSTALL_WEB_INTERFACE}" == true ]] && echo "${arrCache[1]}";;
+-            "FTL"       )  [[ "${INSTALL_WEB_INTERFACE}" == true ]] && echo "${arrCache[2]}" || echo "${arrCache[1]}";;
+-        esac
+-
+-        return 0
+-    fi
+-
+-    version=$(curl --silent --fail "https://api.github.com/repos/pi-hole/${daemon}/releases/latest" | \
+-        awk -F: '$1 ~/tag_name/ { print $2 }' | \
+-        tr -cd '[[:alnum:]]._-')
+-    if [[ "${version}" =~ ^v ]]; then
+-        echo "${version}"
+-    else
+-        echo "ERROR"
+-        return 1
+-    fi
+-    return 0
+-}
+-
+-getLocalBranch(){
+-    # Get the checked out branch of the local directory
+-    local directory="${1}"
+-    local branch
+-
+-    # Local FTL btranch is stored in /etc/pihole/ftlbranch
+-    if [[ "$1" == "FTL" ]]; then
+-        branch="$(pihole-FTL branch)"
+-    else
+-        cd "${directory}" 2> /dev/null || { echo "${DEFAULT}"; return 1; }
+-        branch=$(git rev-parse --abbrev-ref HEAD || echo "$DEFAULT")
+-    fi
+-    if [[ ! "${branch}" =~ ^v ]]; then
+-        if [[ "${branch}" == "master" ]]; then
+-            echo ""
+-        elif [[ "${branch}" == "HEAD" ]]; then
+-            echo "in detached HEAD state at "
+-        else
+-            echo "${branch} "
+-        fi
+-    else
+-        # Branch started in "v"
+-        echo "release "
+-    fi
+-    return 0
+-}
+-
+-versionOutput() {
+-    if [[ "$1" == "AdminLTE" && "${INSTALL_WEB_INTERFACE}" != true ]]; then
+-        echo "  WebAdmin not installed"
+-        return 1
+-    fi
+-
+-    [[ "$1" == "pi-hole" ]] && GITDIR=$COREGITDIR
+-    [[ "$1" == "AdminLTE" ]] && GITDIR=$WEBGITDIR
+-    [[ "$1" == "FTL" ]] && GITDIR="FTL"
+-
+-    [[ "$2" == "-c" ]] || [[ "$2" == "--current" ]] || [[ -z "$2" ]] && current=$(getLocalVersion $GITDIR) && branch=$(getLocalBranch $GITDIR)
+-    [[ "$2" == "-l" ]] || [[ "$2" == "--latest" ]] || [[ -z "$2" ]] && latest=$(getRemoteVersion "$1")
+-    if [[ "$2" == "-h" ]] || [[ "$2" == "--hash" ]]; then
+-        [[ "$3" == "-c" ]] || [[ "$3" == "--current" ]] || [[ -z "$3" ]] && curHash=$(getLocalHash "$GITDIR") && branch=$(getLocalBranch $GITDIR)
+-        [[ "$3" == "-l" ]] || [[ "$3" == "--latest" ]] || [[ -z "$3" ]] && latHash=$(getRemoteHash "$1" "$(cd "$GITDIR" 2> /dev/null && git rev-parse --abbrev-ref HEAD)")
+-    fi
+-    if [[ -n "$current" ]] && [[ -n "$latest" ]]; then
+-        output="${1^} version is $branch$current (Latest: $latest)"
+-    elif [[ -n "$current" ]] && [[ -z "$latest" ]]; then
+-        output="Current ${1^} version is $branch$current"
+-    elif [[ -z "$current" ]] && [[ -n "$latest" ]]; then
+-        output="Latest ${1^} version is $latest"
+-    elif [[ "$curHash" == "N/A" ]] || [[ "$latHash" == "N/A" ]]; then
+-        output="${1^} hash is not applicable"
+-    elif [[ -n "$curHash" ]] && [[ -n "$latHash" ]]; then
+-        output="${1^} hash is $curHash (Latest: $latHash)"
+-    elif [[ -n "$curHash" ]] && [[ -z "$latHash" ]]; then
+-        output="Current ${1^} hash is $curHash"
+-    elif [[ -z "$curHash" ]] && [[ -n "$latHash" ]]; then
+-        output="Latest ${1^} hash is $latHash"
+-    else
+-        errorOutput
+-        return 1
+-    fi
+-
+-    [[ -n "$output" ]] && echo "  $output"
+-}
+-
+-errorOutput() {
+-    echo "  Invalid Option! Try 'pihole -v --help' for more information."
+-    exit 1
+-}
++getLocalVersion() {
++    if [[ "$1" == "FTL" ]]; then
++        if [[ -f "/usr/lib/opkg/info/pihole-FTL.control" ]]; then
++            grep Version /usr/lib/opkg/info/pihole-FTL.control | awk '{print $2}'
++        else
++            echo "UNKNOWN"
++        fi
++    elif [[ "$1" == "pi-hole" ]]; then
++        if [[ -f "/usr/lib/opkg/info/pihole.control" ]]; then
++            grep Version /usr/lib/opkg/info/pihole.control | awk '{print $2}'
++        else
++           echo "UNKNOWN"
++        fi
++     else
++        if [[ -f "/usr/lib/opkg/info/pihole-web.control" ]]; then
++            grep Version /usr/lib/opkg/info/pihole-web.control | awk '{print $2}'
++        else
++            echo "UNKNOWN"
++        fi
++    fi
++    return 0
++}
++
++versionOutput() {
++    output="${1^} version is v$(getLocalVersion $1)"
++    [[ -n "$output" ]] && echo "  $output"
++}
+ 
+ defaultOutput() {
+     versionOutput "pi-hole" "$@"
+-
+-    if [[ "${INSTALL_WEB_INTERFACE}" == true ]]; then
+-        versionOutput "AdminLTE" "$@"
+-    fi
+-
++    versionOutput "AdminLTE" "$@"
+     versionOutput "FTL" "$@"
+ }
+ 
+@@ -206,11 +51,6 @@ Repositories:
+   -p, --pihole         Only retrieve info regarding Pi-hole repository
+   -a, --admin          Only retrieve info regarding AdminLTE repository
+   -f, --ftl            Only retrieve info regarding FTL repository
+-
+-Options:
+-  -c, --current        Return the current version
+-  -l, --latest         Return the latest version
+-  --hash               Return the GitHub hash from your local repositories
+   -h, --help           Show this help dialog"
+   exit 0
+ }
+--- a/advanced/Scripts/webpage.sh
++++ b/advanced/Scripts/webpage.sh
+@@ -10,27 +10,21 @@
+ # This file is copyright under the latest version of the EUPL.
+ # Please see LICENSE file for your rights under this license.
+ 
+-readonly dnsmasqconfig="/etc/dnsmasq.d/01-pihole.conf"
+-readonly dhcpconfig="/etc/dnsmasq.d/02-pihole-dhcp.conf"
+-readonly FTLconf="/etc/pihole/pihole-FTL.conf"
+-# 03 -> wildcards
+-readonly dhcpstaticconfig="/etc/dnsmasq.d/04-pihole-static-dhcp.conf"
+-readonly dnscustomfile="/etc/pihole/custom.list"
+-readonly dnscustomcnamefile="/etc/dnsmasq.d/05-pihole-custom-cname.conf"
+-
+-readonly gravityDBfile="/etc/pihole/gravity.db"
+-
+-# Source install script for ${setupVars}, ${PI_HOLE_BIN_DIR} and valid_ip()
+-readonly PI_HOLE_FILES_DIR="/etc/.pihole"
+ # shellcheck disable=SC2034  # used in basic-install
+ PH_TEST="true"
+-source "${PI_HOLE_FILES_DIR}/automated install/basic-install.sh"
++source "/usr/lib/pihole/basic-install.sh"
+ 
+-coltable="/opt/pihole/COL_TABLE"
++coltable="/usr/lib/pihole/COL_TABLE"
+ if [[ -f ${coltable} ]]; then
+     source ${coltable}
+ fi
+ 
++source /lib/config/uci.sh
++
++gravityDBfile_default="/etc/pihole/gravity.db"
++GDB="$(uci_get pihole @pihole[0] gravitydb)"
++gravityDBfile="${GDB:-$gravityDBfile_default}"
++
+ helpFunc() {
+     echo "Usage: pihole -a [options]
+ Example: pihole -a -p password
+@@ -44,55 +38,10 @@ Options:
+   -e, email                       Set an administrative contact address for the Block Page
+   -h, --help                      Show this help dialog
+   -i, interface                   Specify dnsmasq's interface listening behavior
+-  -l, privacylevel                Set privacy level (0 = lowest, 3 = highest)
+-  -t, teleporter                  Backup configuration as an archive
+-  -t, teleporter myname.tar.gz    Backup configuration to archive with name myname.tar.gz as specified"
++  -l, privacylevel                Set privacy level (0 = lowest, 3 = highest)"
+     exit 0
+ }
+ 
+-add_setting() {
+-    echo "${1}=${2}" >> "${setupVars}"
+-}
+-
+-delete_setting() {
+-    sed -i "/^${1}/d" "${setupVars}"
+-}
+-
+-change_setting() {
+-    delete_setting "${1}"
+-    add_setting "${1}" "${2}"
+-}
+-
+-addFTLsetting() {
+-    echo "${1}=${2}" >> "${FTLconf}"
+-}
+-
+-deleteFTLsetting() {
+-    sed -i "/^${1}/d" "${FTLconf}"
+-}
+-
+-changeFTLsetting() {
+-    deleteFTLsetting "${1}"
+-    addFTLsetting "${1}" "${2}"
+-}
+-
+-add_dnsmasq_setting() {
+-    if [[ "${2}" != "" ]]; then
+-        echo "${1}=${2}" >> "${dnsmasqconfig}"
+-    else
+-        echo "${1}" >> "${dnsmasqconfig}"
+-    fi
+-}
+-
+-delete_dnsmasq_setting() {
+-    sed -i "/^${1}/d" "${dnsmasqconfig}"
+-}
+-
+-SetTemperatureUnit() {
+-    change_setting "TEMPERATUREUNIT" "${unit}"
+-    echo -e "  ${TICK} Set temperature unit to ${unit}"
+-}
+-
+ HashPassword() {
+     # Compute password hash twice to avoid rainbow table vulnerability
+     return=$(echo -n "${1}" | sha256sum | sed 's/\s.*$//')
+@@ -124,7 +73,8 @@ SetWebPassword() {
+         echo ""
+ 
+         if [ "${PASSWORD}" == "" ]; then
+-            change_setting "WEBPASSWORD" ""
++            uci_remove "pihole" "@pihole[0]" "web_password"
++            uci_commit pihole
+             echo -e "  ${TICK} Password Removed"
+             exit 0
+         fi
+@@ -137,7 +87,8 @@ SetWebPassword() {
+         # We do not wrap this in brackets, otherwise BASH will expand any appropriate syntax
+         hash=$(HashPassword "$PASSWORD")
+         # Save hash to file
+-        change_setting "WEBPASSWORD" "${hash}"
++		uci_set "pihole" "@pihole[0]" "web_password" "${hash}"
++		uci_commit pihole
+         echo -e "  ${TICK} New password set"
+     else
+         echo -e "  ${CROSS} Passwords don't match. Your password has not been changed"
+@@ -145,165 +96,9 @@ SetWebPassword() {
+     fi
+ }
+ 
+-ProcessDNSSettings() {
+-    source "${setupVars}"
+-
+-    delete_dnsmasq_setting "server"
+-
+-    COUNTER=1
+-    while true ; do
+-        var=PIHOLE_DNS_${COUNTER}
+-        if [ -z "${!var}" ]; then
+-            break;
+-        fi
+-        add_dnsmasq_setting "server" "${!var}"
+-        (( COUNTER++ ))
+-    done
+-
+-    # The option LOCAL_DNS_PORT is deprecated
+-    # We apply it once more, and then convert it into the current format
+-    if [ -n "${LOCAL_DNS_PORT}" ]; then
+-        add_dnsmasq_setting "server" "127.0.0.1#${LOCAL_DNS_PORT}"
+-        add_setting "PIHOLE_DNS_${COUNTER}" "127.0.0.1#${LOCAL_DNS_PORT}"
+-        delete_setting "LOCAL_DNS_PORT"
+-    fi
+-
+-    delete_dnsmasq_setting "domain-needed"
+-    delete_dnsmasq_setting "expand-hosts"
+-
+-    if [[ "${DNS_FQDN_REQUIRED}" == true ]]; then
+-        add_dnsmasq_setting "domain-needed"
+-        add_dnsmasq_setting "expand-hosts"
+-    fi
+-
+-    delete_dnsmasq_setting "bogus-priv"
+-
+-    if [[ "${DNS_BOGUS_PRIV}" == true ]]; then
+-        add_dnsmasq_setting "bogus-priv"
+-    fi
+-
+-    delete_dnsmasq_setting "dnssec"
+-    delete_dnsmasq_setting "trust-anchor="
+-
+-    if [[ "${DNSSEC}" == true ]]; then
+-        echo "dnssec
+-trust-anchor=.,20326,8,2,E06D44B80B8F1D39A95C0B0D7C65D08458E880409BBC683457104237C7F8EC8D
+-" >> "${dnsmasqconfig}"
+-    fi
+-
+-    delete_dnsmasq_setting "host-record"
+-
+-    if [ -n "${HOSTRECORD}" ]; then
+-        add_dnsmasq_setting "host-record" "${HOSTRECORD}"
+-    fi
+-
+-    # Setup interface listening behavior of dnsmasq
+-    delete_dnsmasq_setting "interface"
+-    delete_dnsmasq_setting "local-service"
+-    delete_dnsmasq_setting "except-interface"
+-    delete_dnsmasq_setting "bind-interfaces"
+-
+-    if [[ "${DNSMASQ_LISTENING}" == "all" ]]; then
+-        # Listen on all interfaces, permit all origins
+-        add_dnsmasq_setting "except-interface" "nonexisting"
+-    elif [[ "${DNSMASQ_LISTENING}" == "local" ]]; then
+-        # Listen only on all interfaces, but only local subnets
+-        add_dnsmasq_setting "local-service"
+-    else
+-        # Options "bind" and "single"
+-        # Listen only on one interface
+-        # Use eth0 as fallback interface if interface is missing in setupVars.conf
+-        if [ -z "${PIHOLE_INTERFACE}" ]; then
+-            PIHOLE_INTERFACE="eth0"
+-        fi
+-
+-        add_dnsmasq_setting "interface" "${PIHOLE_INTERFACE}"
+-
+-        if [[ "${DNSMASQ_LISTENING}" == "bind" ]]; then
+-            # Really bind to interface
+-            add_dnsmasq_setting "bind-interfaces"
+-        fi
+-    fi
+-
+-    if [[ "${CONDITIONAL_FORWARDING}" == true ]]; then
+-        # Convert legacy "conditional forwarding" to rev-server configuration
+-        # Remove any existing REV_SERVER settings
+-        delete_setting "REV_SERVER"
+-        delete_setting "REV_SERVER_DOMAIN"
+-        delete_setting "REV_SERVER_TARGET"
+-        delete_setting "REV_SERVER_CIDR"
+-
+-        REV_SERVER=true
+-        add_setting "REV_SERVER" "true"
+-
+-        REV_SERVER_DOMAIN="${CONDITIONAL_FORWARDING_DOMAIN}"
+-        add_setting "REV_SERVER_DOMAIN" "${REV_SERVER_DOMAIN}"
+-
+-        REV_SERVER_TARGET="${CONDITIONAL_FORWARDING_IP}"
+-        add_setting "REV_SERVER_TARGET" "${REV_SERVER_TARGET}"
+-
+-        #Convert CONDITIONAL_FORWARDING_REVERSE if necessary e.g:
+-        #          1.1.168.192.in-addr.arpa to 192.168.1.1/32
+-        #          1.168.192.in-addr.arpa to 192.168.1.0/24
+-        #          168.192.in-addr.arpa to 192.168.0.0/16
+-        #          192.in-addr.arpa to 192.0.0.0/8
+-        if [[ "${CONDITIONAL_FORWARDING_REVERSE}" == *"in-addr.arpa" ]];then
+-            arrRev=("${CONDITIONAL_FORWARDING_REVERSE//./ }")
+-            case ${#arrRev[@]} in
+-                6   )   REV_SERVER_CIDR="${arrRev[3]}.${arrRev[2]}.${arrRev[1]}.${arrRev[0]}/32";;
+-                5   )   REV_SERVER_CIDR="${arrRev[2]}.${arrRev[1]}.${arrRev[0]}.0/24";;
+-                4   )   REV_SERVER_CIDR="${arrRev[1]}.${arrRev[0]}.0.0/16";;
+-                3   )   REV_SERVER_CIDR="${arrRev[0]}.0.0.0/8";;
+-            esac
+-        else
+-            # Set REV_SERVER_CIDR to whatever value it was set to
+-            REV_SERVER_CIDR="${CONDITIONAL_FORWARDING_REVERSE}"
+-        fi
+-
+-        # If REV_SERVER_CIDR is not converted by the above, then use the REV_SERVER_TARGET variable to derive it
+-        if [ -z "${REV_SERVER_CIDR}" ]; then
+-            # Convert existing input to /24 subnet (preserves legacy behavior)
+-            # This sed converts "192.168.1.2" to "192.168.1.0/24"
+-            # shellcheck disable=2001
+-            REV_SERVER_CIDR="$(sed "s+\\.[0-9]*$+\\.0/24+" <<< "${REV_SERVER_TARGET}")"
+-        fi
+-        add_setting "REV_SERVER_CIDR" "${REV_SERVER_CIDR}"
+-
+-        # Remove obsolete settings from setupVars.conf
+-        delete_setting "CONDITIONAL_FORWARDING"
+-        delete_setting "CONDITIONAL_FORWARDING_REVERSE"
+-        delete_setting "CONDITIONAL_FORWARDING_DOMAIN"
+-        delete_setting "CONDITIONAL_FORWARDING_IP"
+-    fi
+-
+-    delete_dnsmasq_setting "rev-server"
+-
+-    if [[ "${REV_SERVER}" == true ]]; then
+-        add_dnsmasq_setting "rev-server=${REV_SERVER_CIDR},${REV_SERVER_TARGET}"
+-        if [ -n "${REV_SERVER_DOMAIN}" ]; then
+-            # Forward local domain names to the CF target, too
+-            add_dnsmasq_setting "server=/${REV_SERVER_DOMAIN}/${REV_SERVER_TARGET}"
+-        fi
+-
+-        if [[ "${DNS_FQDN_REQUIRED}" != true ]]; then
+-            # Forward unqualified names to the CF target only when the "never
+-            # forward non-FQDN" option is unticked
+-            add_dnsmasq_setting "server=//${REV_SERVER_TARGET}"
+-        fi
+-
+-    fi
+-
+-    # We need to process DHCP settings here as well to account for possible
+-    # changes in the non-FQDN forwarding. This cannot be done in 01-pihole.conf
+-    # as we don't want to delete all local=/.../ lines so it's much safer to
+-    # simply rewrite the entire corresponding config file (which is what the
+-    # DHCP settings subroutie is doing)
+-    ProcessDHCPSettings
+-}
+-
+ SetDNSServers() {
+     # Save setting to file
+-    delete_setting "PIHOLE_DNS"
++	uci_remove "dhcp" "@dnsmasq[0]" "server"
+     IFS=',' read -r -a array <<< "${args[2]}"
+     for index in "${!array[@]}"
+     do
+@@ -312,7 +107,7 @@ SetDNSServers() {
+         ip="${array[index]//\\#/#}"
+ 
+         if valid_ip "${ip}" || valid_ip6 "${ip}" ; then
+-            add_setting "PIHOLE_DNS_$((index+1))" "${ip}"
++			uci_add_list "dhcp" "@dnsmasq[0]" "server" "${ip}"
+         else
+             echo -e "  ${CROSS} Invalid IP has been passed"
+             exit 1
+@@ -320,44 +115,47 @@ SetDNSServers() {
+     done
+ 
+     if [[ "${args[3]}" == "domain-needed" ]]; then
+-        change_setting "DNS_FQDN_REQUIRED" "true"
++		uci_set "dhcp" "@dnsmasq[0]" "domainneeded" "1"
+     else
+-        change_setting "DNS_FQDN_REQUIRED" "false"
++		uci_set "dhcp" "@dnsmasq[0]" "domainneeded" "0"
+     fi
+ 
+     if [[ "${args[4]}" == "bogus-priv" ]]; then
+-        change_setting "DNS_BOGUS_PRIV" "true"
++		uci_set "dhcp" "@dnsmasq[0]" "boguspriv" "1"
+     else
+-        change_setting "DNS_BOGUS_PRIV" "false"
++		uci_set "dhcp" "@dnsmasq[0]" "boguspriv" "0"
+     fi
+ 
+     if [[ "${args[5]}" == "dnssec" ]]; then
+-        change_setting "DNSSEC" "true"
++		uci_set "dhcp" "@dnsmasq[0]" "dnssec" "1"
+     else
+-        change_setting "DNSSEC" "false"
++		uci_set "dhcp" "@dnsmasq[0]" "dnssec" "0"
+     fi
+ 
+-    if [[ "${args[6]}" == "rev-server" ]]; then
+-        change_setting "REV_SERVER" "true"
+-        change_setting "REV_SERVER_CIDR" "${args[7]}"
+-        change_setting "REV_SERVER_TARGET" "${args[8]}"
+-        change_setting "REV_SERVER_DOMAIN" "${args[9]}"
+-    else
+-        change_setting "REV_SERVER" "false"
+-    fi
+-
+-    ProcessDNSSettings
++	uci_commit dhcp
+ 
+     # Restart dnsmasq to load new configuration
+     RestartDNS
+ }
+ 
+ SetExcludeDomains() {
+-    change_setting "API_EXCLUDE_DOMAINS" "${args[2]}"
++	local domainlist="${args[2]}"
++	uci_remove "pihole" "@pihole[0]" "api_exclude_domains"
++	for f in ${domainlist//,/ }
++	do
++		uci_add_list "pihole" "@pihole[0]" "api_exclude_domains" "$f"
++	done
++	uci_commit pihole
+ }
+ 
+ SetExcludeClients() {
+-    change_setting "API_EXCLUDE_CLIENTS" "${args[2]}"
++	local clientlist="${args[2]}"
++	uci_remove "pihole" "@pihole[0]" "api_exclude_clients"
++	for f in ${clientlist//,/ }
++	do
++		uci_add_list "pihole" "@pihole[0]" "api_exclude_clients" "$f"
++	done
++	uci_commit pihole
+ }
+ 
+ Poweroff(){
+@@ -368,136 +166,99 @@ Reboot() {
+     nohup bash -c "sleep 5; reboot" &> /dev/null </dev/null &
+ }
+ 
+-RestartDNS() {
+-    "${PI_HOLE_BIN_DIR}"/pihole restartdns
+-}
+-
+-SetQueryLogOptions() {
+-    change_setting "API_QUERY_LOG_SHOW" "${args[2]}"
+-}
+-
+-ProcessDHCPSettings() {
+-    source "${setupVars}"
+-
+-    if [[ "${DHCP_ACTIVE}" == "true" ]]; then
+-        interface="${PIHOLE_INTERFACE}"
+-
+-        # Use eth0 as fallback interface
+-        if [ -z ${interface} ]; then
+-            interface="eth0"
+-        fi
+-
+-        if [[ "${PIHOLE_DOMAIN}" == "" ]]; then
+-            PIHOLE_DOMAIN="lan"
+-            change_setting "PIHOLE_DOMAIN" "${PIHOLE_DOMAIN}"
+-        fi
+-
+-        if [[ "${DHCP_LEASETIME}" == "0" ]]; then
+-            leasetime="infinite"
+-        elif [[ "${DHCP_LEASETIME}" == "" ]]; then
+-            leasetime="24"
+-            change_setting "DHCP_LEASETIME" "${leasetime}"
+-        elif [[ "${DHCP_LEASETIME}" == "24h" ]]; then
+-            #Installation is affected by known bug, introduced in a previous version.
+-            #This will automatically clean up setupVars.conf and remove the unnecessary "h"
+-            leasetime="24"
+-            change_setting "DHCP_LEASETIME" "${leasetime}"
+-        else
+-            leasetime="${DHCP_LEASETIME}h"
+-        fi
+-
+-        # Write settings to file
+-        echo "###############################################################################
+-#  DHCP SERVER CONFIG FILE AUTOMATICALLY POPULATED BY PI-HOLE WEB INTERFACE.  #
+-#            ANY CHANGES MADE TO THIS FILE WILL BE LOST ON CHANGE             #
+-###############################################################################
+-dhcp-authoritative
+-dhcp-range=${DHCP_START},${DHCP_END},${leasetime}
+-dhcp-option=option:router,${DHCP_ROUTER}
+-dhcp-leasefile=/etc/pihole/dhcp.leases
+-#quiet-dhcp
+-" > "${dhcpconfig}"
+-        chmod 644 "${dhcpconfig}"
+-
+-        if [[ "${PIHOLE_DOMAIN}" != "none" ]]; then
+-            echo "domain=${PIHOLE_DOMAIN}" >> "${dhcpconfig}"
+-
+-            # When there is a Pi-hole domain set and "Never forward non-FQDNs" is
+-            # ticked, we add `local=/domain/` to tell FTL that this domain is purely
+-            # local and FTL may answer queries from /etc/hosts or DHCP but should
+-            # never forward queries on that domain to any upstream servers
+-            if  [[ "${DNS_FQDN_REQUIRED}" == true ]]; then
+-                echo "local=/${PIHOLE_DOMAIN}/" >> "${dhcpconfig}"
+-            fi
+-        fi
++RestartDNS() {
++    if command -v pihole &> /dev/null; then
++        pihole restartdns
++    else
++        /etc/init.d/pihole-FTL restart
++    fi
++}
++
++SetDHCP() {
++	local iface="$(uci_get "pihole" "@pihole[0]" "interface")"
++	local o_start="$(uci_get "dhcp" "${iface}" "start")"
++	local o_end="$(uci_get "dhcp" "${iface}" "limit")"
++	local o_dom="$(uci_get "dhcp" "${iface}" "domain_iface")"
++	local o_leasetime="$(uci_get "dhcp" "${iface}" "leasetime")"
++	local o_ipaddr="$(uci_get "network" "${iface}" "ipaddr")"
++	local o_rapid="$(uci_get "dhcp" "@dnsmasq[0]" "rapidcommit")"
++	local o_sequential="$(uci_get "dhcp" "@dnsmasq[0]" "sequential_ip")"
++	local o_leasefile="$(uci_get "dhcp" "@dnsmasq[0]" "leasefile")"
++	local commit_dhcp=0 commit_net=0 loop=0 VALUE
++	o_leasetime=${o_leasetime//h/}
++
++	while [ $loop -lt ${#args[*]} ]; do
++		VALUE=${args[$loop]##*=}
++		case "${args[$loop]}" in
++    		ROUTER=*)
++				if valid_ip "${VALUE}" && [[ "$o_ipaddr" != "${VALUE}" ]]; then
++					uci_set "network" "${iface}" "ipaddr" "${VALUE}"
++					commit_net=1
++				fi
++			;;
++    		START=*)
++				if [[ "$o_start" != "${VALUE}" ]]; then
++					uci_set "dhcp" "${iface}" "start" "${VALUE}" && start_="${VALUE}"
++					commit_dhcp=1
++				fi
++			;;
++    		END=*)
++				if [[ "$o_end" != "${VALUE}" ]]; then
++					uci_set "dhcp" "${iface}" "limit" "$(( $VALUE - $start_ ))"
++					commit_dhcp=1
++				fi
++			;;
++    		LEASETIME=*)
++				if [[ ${VALUE} -gt 0 ]] && [[ "$o_leasetime" != "${VALUE}" ]]; then
++					uci_set "dhcp" "${iface}" "leasetime" "${VALUE}h"
++					commit_dhcp=1
++				fi
++			;;
++    		RAPID=*)
++				if [[ "$o_rapid" != "${VALUE}" ]]; then
++					uci_set "dhcp" "@dnsmasq[0]" "rapidcommit" "${VALUE}"
++					commit_dhcp=1
++				fi
++			;;
++    		DOMAIN=*)
++				if [[ "$o_dom" != "${VALUE}" ]]; then
++					uci_set "dhcp" "${iface}" "domain_iface" "${VALUE}"
++					commit_dhcp=1
++				fi
++			;;
++    		SEQUENTIAL=*)
++				if [[ "$o_sequential" != "${VALUE}" ]]; then
++					uci_set "dhcp" "@dnsmasq[0]" "sequential_ip" "${VALUE}"
++					commit_dhcp=1
++				fi
++			;;
++    		LEASEFILE=*)
++				if [[ "$o_leasefile" != "${VALUE}" ]]; then
++					uci_set "dhcp" "@dnsmasq[0]" "leasefile" "${VALUE}"
++					commit_dhcp=1
++				fi
++			;;
++		esac
++		loop=$(( loop + 1 ))
++	done
+ 
+-        # Sourced from setupVars
+-        # shellcheck disable=SC2154
+-        if [[ "${DHCP_rapid_commit}" == "true" ]]; then
+-            echo "dhcp-rapid-commit" >> "${dhcpconfig}"
+-        fi
+-
+-        if [[ "${DHCP_IPv6}" == "true" ]]; then
+-            echo "#quiet-dhcp6
+-#enable-ra
+-dhcp-option=option6:dns-server,[::]
+-dhcp-range=::100,::1ff,constructor:${interface},ra-names,slaac,64,3600
+-ra-param=*,0,0
+-" >> "${dhcpconfig}"
+-        fi
+-
+-    else
+-        if [[ -f "${dhcpconfig}" ]]; then
+-            rm "${dhcpconfig}" &> /dev/null
+-        fi
+-    fi
++	[[ $commit_dhcp -eq 1 ]] && uci_commit dhcp && RestartDNS
++	[[ $commit_net -eq 1 ]] && uci_commit network && /etc/init.d/network restart
+ }
+ 
+-EnableDHCP() {
+-    change_setting "DHCP_ACTIVE" "true"
+-    change_setting "DHCP_START" "${args[2]}"
+-    change_setting "DHCP_END" "${args[3]}"
+-    change_setting "DHCP_ROUTER" "${args[4]}"
+-    change_setting "DHCP_LEASETIME" "${args[5]}"
+-    change_setting "PIHOLE_DOMAIN" "${args[6]}"
+-    change_setting "DHCP_IPv6" "${args[7]}"
+-    change_setting "DHCP_rapid_commit" "${args[8]}"
+-
+-    # Remove possible old setting from file
+-    delete_dnsmasq_setting "dhcp-"
+-    delete_dnsmasq_setting "quiet-dhcp"
+-
+-    # If a DHCP client claims that its name is "wpad", ignore that.
+-    # This fixes a security hole. see CERT Vulnerability VU#598349
+-    # We also ignore "localhost" as Windows behaves strangely if a
+-    # device claims this host name
+-    add_dnsmasq_setting "dhcp-name-match=set:hostname-ignore,wpad
+-dhcp-name-match=set:hostname-ignore,localhost
+-dhcp-ignore-names=tag:hostname-ignore"
+-
+-    ProcessDHCPSettings
+-
+-    RestartDNS
+-}
+-
+-DisableDHCP() {
+-    change_setting "DHCP_ACTIVE" "false"
+-
+-    # Remove possible old setting from file
+-    delete_dnsmasq_setting "dhcp-"
+-    delete_dnsmasq_setting "quiet-dhcp"
+-
+-    ProcessDHCPSettings
+-
+-    RestartDNS
++SetQueryLogOptions() {
++	uci_set "pihole" "@pihole[0]" "api_query_log_show" "${args[2]}"
++	uci_commit pihole
+ }
+ 
+ SetWebUILayout() {
+-    change_setting "WEBUIBOXEDLAYOUT" "${args[2]}"
++	uci_set "pihole" "@pihole[0]" "web_fluid" "${args[2]}"
++	uci_commit pihole
+ }
+ 
+ SetWebUITheme() {
+-    change_setting "WEBTHEME" "${args[2]}"
++	uci_set "pihole" "@pihole[0]" "web_theme" "${args[2]}"
++	uci_commit pihole
+ }
+ 
+ CheckUrl(){
+@@ -545,23 +306,42 @@ AddDHCPStaticAddress() {
+     mac="${args[2]}"
+     ip="${args[3]}"
+     host="${args[4]}"
++    duid="${args[5]}"
++    hostid="${args[6]}"
+ 
+-    if [[ "${ip}" == "noip" ]]; then
+-        # Static host name
+-        echo "dhcp-host=${mac},${host}" >> "${dhcpstaticconfig}"
+-    elif [[ "${host}" == "nohost" ]]; then
+-        # Static IP
+-        echo "dhcp-host=${mac},${ip}" >> "${dhcpstaticconfig}"
+-    else
+-        # Full info given
+-        echo "dhcp-host=${mac},${ip},${host}" >> "${dhcpstaticconfig}"
+-    fi
++    if [[ "$mac" =~ ^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$ ]]; then
++		if /sbin/uci show dhcp | grep -Eq "host.*${mac}"; then
++	        echo "  ${CROSS} This Mac Address already static!"
++	        exit 1
++	    else
++			uci_add "dhcp" "host"
++			uci_set "dhcp" "@host[-1]" "dns" "1"
++			uci_set "dhcp" "@host[-1]" "mac" "${mac}"
++			[[ "${host}" != "nohost" ]] && uci_set "dhcp" "@host[-1]" "name" "${host}"
++			[[ "${ip}" != "noip" ]] && valid_ip "${ip}" && uci_set "dhcp" "@host[-1]" "ip" "${ip}"
++			[[ "${duid}" != "noduid" ]] && uci_set "dhcp" "@host[-1]" "duid" "${duid//:/}"
++			[[ "${hostid}" != "nohostid" ]] && uci_set "dhcp" "@host[-1]" "hostid" "${hostid}"
++			uci_commit dhcp
++			RestartDNS
++	    fi
++    else
++        echo "  ${CROSS} Invalid Mac Passed!"
++        exit 1
++    fi
+ }
+ 
+ RemoveDHCPStaticAddress() {
+     mac="${args[2]}"
++	index="$(/sbin/uci show dhcp | grep "${mac}" | sed 's/.*\[\([^]]*\)\].*/\1/g')"
+     if [[ "$mac" =~ ^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$ ]]; then
+-        sed -i "/dhcp-host=${mac}.*/d" "${dhcpstaticconfig}"
++		if [[ $index -ge 0 ]]; then
++			uci_remove "dhcp" "@host[${index}]"
++			uci_commit dhcp
++			RestartDNS
++	    else
++	        echo "  ${CROSS} Invalid Index Acquired!"
++	        exit 1
++	    fi
+     else
+         echo "  ${CROSS} Invalid Mac Passed!"
+         exit 1
+@@ -592,16 +372,21 @@ Options:
+             exit 0
+         fi
+ 
+-        change_setting "ADMIN_EMAIL" "${args[2]}"
++		uci_set "pihole" "@pihole[0]" "admin_email" "${args[2]}"
+         echo -e "  ${TICK} Setting admin contact to ${args[2]}"
+     else
+-        change_setting "ADMIN_EMAIL" ""
++		uci_remove "pihole" "@pihole[0]" "admin_email"
+         echo -e "  ${TICK} Removing admin contact"
+     fi
++	uci_commit pihole
+ }
+ 
+ SetListeningMode() {
+-    source "${setupVars}"
++	local iface="$(uci -q get pihole.@pihole[0].interface)"
++	local device="$(ifstatus $iface | jsonfilter -e "\$.l3_device")"
++	local all="$(uci -q get dhcp.@dnsmasq[0].notinterface | grep -o nonexisting)"
++	local single="$(uci -q get dhcp.@dnsmasq[0].interface | grep -o $device)"
++	local local="$(uci -q get dhcp.@dnsmasq[0].localservice)"
+ 
+     if [[ "$3" == "-h" ]] || [[ "$3" == "--help" ]]; then
+         echo "Usage: pihole -a -i [interface]
+@@ -611,49 +396,37 @@ Specify dnsmasq's network interface list
+ Interfaces:
+   local               Only respond to queries from devices that
+                       are at most one hop away (local devices)
+-  single              Respond only on interface ${PIHOLE_INTERFACE}
+-  bind                Bind only on interface ${PIHOLE_INTERFACE}
++  single              Respond only on interface ${iface}/${device}
+   all                 Listen on all interfaces, permit all origins"
+         exit 0
+     fi
+ 
+     if [[ "${args[2]}" == "all" ]]; then
+         echo -e "  ${INFO} Listening on all interfaces, permitting all origins. Please use a firewall!"
+-        change_setting "DNSMASQ_LISTENING" "all"
++		[[ -z "$all" ]] && uci_add_list "dhcp" "@dnsmasq[0]" "notinterface" "nonexisting"
++		[[ "$local" == "1" ]] && uci_set "dhcp" "@dnsmasq[0]" "localservice" "0"
++		[[ -z "$single" ]] || uci del_list dhcp.@dnsmasq[0].interface=$device
+     elif [[ "${args[2]}" == "local" ]]; then
+         echo -e "  ${INFO} Listening on all interfaces, permitting origins from one hop away (LAN)"
+-        change_setting "DNSMASQ_LISTENING" "local"
+-    elif [[ "${args[2]}" == "bind" ]]; then
+-        echo -e "  ${INFO} Binding on interface ${PIHOLE_INTERFACE}"
+-        change_setting "DNSMASQ_LISTENING" "bind"
++		[[ "$local" == "0" ]] && uci_set "dhcp" "@dnsmasq[0]" "localservice" "1"
++		[[ -z "$all" ]] || uci del_list dhcp.@dnsmasq[0].notinterface=nonexisting
++		[[ -z "$single" ]] || uci del_list dhcp.@dnsmasq[0].interface=$device
+     else
+-        echo -e "  ${INFO} Listening only on interface ${PIHOLE_INTERFACE}"
+-        change_setting "DNSMASQ_LISTENING" "single"
++        echo -e "  ${INFO} Listening only on interface ${iface}/${device}"
++		[[ -z "$single" ]] && uci_add_list "dhcp" "@dnsmasq[0]" "interface" "${device:-br-lan}"
++		[[ "$local" == "1" ]] && uci_set "dhcp" "@dnsmasq[0]" "localservice" "0"
++		[[ -z "$all" ]] || uci del_list dhcp.@dnsmasq[0].notinterface=nonexisting
+     fi
++	[[ $(uci changes | wc -w) -gt 0 ]] && uci_commit dhcp
+ 
+     # Don't restart DNS server yet because other settings
+     # will be applied afterwards if "-web" is set
+     if [[ "${args[3]}" != "-web" ]]; then
+-        ProcessDNSSettings
+         # Restart dnsmasq to load new configuration
+         RestartDNS
+     fi
+ }
+ 
+-Teleporter() {
+-    local filename
+-    filename="${args[2]}"
+-    if [[ -z "${filename}" ]]; then
+-        local datetimestamp
+-        local host
+-        datetimestamp=$(date "+%Y-%m-%d_%H-%M-%S")
+-        host=$(hostname)
+-        host="${host//./_}"
+-        filename="pi-hole-${host:-noname}-teleporter_${datetimestamp}.tar.gz"
+-    fi
+-    php /var/www/html/admin/scripts/pi-hole/php/teleporter.php > "${filename}"
+-}
+-
+ checkDomain()
+ {
+     local domain validDomain
+@@ -698,7 +471,8 @@ clearAudit()
+ SetPrivacyLevel() {
+     # Set privacy level. Minimum is 0, maximum is 3
+     if [ "${args[2]}" -ge 0 ] && [ "${args[2]}" -le 3 ]; then
+-        changeFTLsetting "PRIVACYLEVEL" "${args[2]}"
++		uci_set "pihole" "@pihole[0]" "privacylevel" "${args[2]}"
++		uci_commit pihole
+         pihole restartdns reload-lists
+     fi
+ }
+@@ -708,12 +482,15 @@ AddCustomDNSAddress() {
+ 
+     ip="${args[2]}"
+     host="${args[3]}"
+-    reload="${args[4]}"
+ 
+     validHost="$(checkDomain "${host}")"
+     if [[ -n "${validHost}" ]]; then
+         if valid_ip "${ip}" || valid_ip6 "${ip}" ; then
+-            echo "${ip} ${validHost}" >> "${dnscustomfile}"
++            uci_add "dhcp" "domain"
++            uci_set "dhcp" "@domain[-1]" "name" "${validHost}"
++            uci_set "dhcp" "@domain[-1]" "ip" "${ip}"
++            uci_commit dhcp
++			RestartDNS
+         else
+             echo -e "  ${CROSS} Invalid IP has been passed"
+             exit 1
+@@ -722,11 +499,6 @@ AddCustomDNSAddress() {
+         echo "  ${CROSS} Invalid Domain passed!"
+         exit 1
+     fi
+-
+-    # Restart dnsmasq to load new custom DNS entries only if $reload not false
+-    if [[ ! $reload == "false" ]]; then
+-        RestartDNS
+-    fi
+ }
+ 
+ RemoveCustomDNSAddress() {
+@@ -734,12 +506,14 @@ RemoveCustomDNSAddress() {
+ 
+     ip="${args[2]}"
+     host="${args[3]}"
+-    reload="${args[4]}"
++	local index="$(/sbin/uci show dhcp | grep "^dhcp.@domain.*$host" | sed 's/.*\[\([^]]*\)\].*/\1/g')"
+ 
+     validHost="$(checkDomain "${host}")"
+     if [[ -n "${validHost}" ]]; then
+         if valid_ip "${ip}" || valid_ip6 "${ip}" ; then
+-            sed -i "/^${ip} ${validHost}$/Id" "${dnscustomfile}"
++            uci_remove dhcp "@domain[${index}]"
++            uci_commit dhcp
++			RestartDNS
+         else
+             echo -e "  ${CROSS} Invalid IP has been passed"
+             exit 1
+@@ -748,11 +522,6 @@ RemoveCustomDNSAddress() {
+         echo "  ${CROSS} Invalid Domain passed!"
+         exit 1
+     fi
+-
+-    # Restart dnsmasq to load new custom DNS entries only if reload is not false
+-    if [[ ! $reload == "false" ]]; then
+-        RestartDNS
+-    fi
+ }
+ 
+ AddCustomCNAMERecord() {
+@@ -760,13 +529,16 @@ AddCustomCNAMERecord() {
+ 
+     domain="${args[2]}"
+     target="${args[3]}"
+-    reload="${args[4]}"
+ 
+     validDomain="$(checkDomain "${domain}")"
+     if [[ -n "${validDomain}" ]]; then
+         validTarget="$(checkDomain "${target}")"
+         if [[ -n "${validTarget}" ]]; then
+-            echo "cname=${validDomain},${validTarget}" >> "${dnscustomcnamefile}"
++            uci_add "dhcp" "cname"
++            uci_set "dhcp" "@cname[-1]" "cname" "${validDomain}"
++            uci_set "dhcp" "@cname[-1]" "target" "${validTarget}"
++            uci_commit dhcp
++			RestartDNS
+         else
+             echo "  ${CROSS} Invalid Target Passed!"
+             exit 1
+@@ -775,10 +547,6 @@ AddCustomCNAMERecord() {
+         echo "  ${CROSS} Invalid Domain passed!"
+         exit 1
+     fi
+-    # Restart dnsmasq to load new custom CNAME records only if reload is not false
+-    if [[ ! $reload == "false" ]]; then
+-        RestartDNS
+-    fi
+ }
+ 
+ RemoveCustomCNAMERecord() {
+@@ -786,13 +554,15 @@ RemoveCustomCNAMERecord() {
+ 
+     domain="${args[2]}"
+     target="${args[3]}"
+-    reload="${args[4]}"
++	local index="$(/sbin/uci show dhcp | grep "^dhcp.@cname.*$validDomain" | sed 's/.*\[\([^]]*\)\].*/\1/g')"
+ 
+     validDomain="$(checkDomain "${domain}")"
+     if [[ -n "${validDomain}" ]]; then
+         validTarget="$(checkDomain "${target}")"
+         if [[ -n "${validTarget}" ]]; then
+-            sed -i "/cname=${validDomain},${validTarget}$/Id" "${dnscustomcnamefile}"
++			uci_remove dhcp "@cname[${index}]"
++			uci_commit dhcp
++			RestartDNS
+         else
+             echo "  ${CROSS} Invalid Target Passed!"
+             exit 1
+@@ -801,11 +571,6 @@ RemoveCustomCNAMERecord() {
+         echo "  ${CROSS} Invalid Domain passed!"
+         exit 1
+     fi
+-
+-    # Restart dnsmasq to update removed custom CNAME records only if $reload not false
+-    if [[ ! $reload == "false" ]]; then
+-        RestartDNS
+-    fi
+ }
+ 
+ main() {
+@@ -813,9 +578,6 @@ main() {
+ 
+     case "${args[1]}" in
+         "-p" | "password"     ) SetWebPassword;;
+-        "-c" | "celsius"      ) unit="C"; SetTemperatureUnit;;
+-        "-f" | "fahrenheit"   ) unit="F"; SetTemperatureUnit;;
+-        "-k" | "kelvin"       ) unit="K"; SetTemperatureUnit;;
+         "setdns"              ) SetDNSServers;;
+         "setexcludedomains"   ) SetExcludeDomains;;
+         "setexcludeclients"   ) SetExcludeClients;;
+@@ -823,8 +585,7 @@ main() {
+         "reboot"              ) Reboot;;
+         "restartdns"          ) RestartDNS;;
+         "setquerylog"         ) SetQueryLogOptions;;
+-        "enabledhcp"          ) EnableDHCP;;
+-        "disabledhcp"         ) DisableDHCP;;
++        "setdhcp"             ) SetDHCP;;
+         "layout"              ) SetWebUILayout;;
+         "theme"               ) SetWebUITheme;;
+         "-h" | "--help"       ) helpFunc;;
+@@ -832,7 +593,6 @@ main() {
+         "removestaticdhcp"    ) RemoveDHCPStaticAddress;;
+         "-e" | "email"        ) SetAdminEmail "$3";;
+         "-i" | "interface"    ) SetListeningMode "$@";;
+-        "-t" | "teleporter"   ) Teleporter;;
+         "adlist"              ) CustomizeAdLists;;
+         "audit"               ) addAudit "$@";;
+         "clearaudit"          ) clearAudit;;
+@@ -841,6 +601,8 @@ main() {
+         "removecustomdns"     ) RemoveCustomDNSAddress;;
+         "addcustomcname"      ) AddCustomCNAMERecord;;
+         "removecustomcname"   ) RemoveCustomCNAMERecord;;
++        "sync"                ) SyncPihole;;
++        "setupstream"         ) SetUpstream;;
+         *                     ) helpFunc;;
+     esac
+ 
+--- a/gravity.sh
++++ b/gravity.sh
+@@ -13,13 +13,14 @@
+ 
+ export LC_ALL=C
+ 
+-coltable="/opt/pihole/COL_TABLE"
++coltable="/usr/lib/pihole/COL_TABLE"
+ source "${coltable}"
+ # shellcheck disable=SC1091
+-source "/etc/.pihole/advanced/Scripts/database_migration/gravity-db.sh"
++source "/usr/lib/pihole/database_migration/gravity-db.sh"
++source /lib/config/uci.sh
+ 
+ basename="pihole"
+-PIHOLE_COMMAND="/usr/local/bin/${basename}"
++PIHOLE_COMMAND="/usr/bin/${basename}"
+ 
+ piholeDir="/etc/${basename}"
+ 
+@@ -29,41 +30,22 @@ blacklistFile="${piholeDir}/blacklist.tx
+ regexFile="${piholeDir}/regex.list"
+ adListFile="${piholeDir}/adlists.list"
+ 
+-localList="${piholeDir}/local.list"
+-VPNList="/etc/openvpn/ipp.txt"
+-
+-piholeGitDir="/etc/.pihole"
+ gravityDBfile_default="${piholeDir}/gravity.db"
+-# GRAVITYDB may be overwritten by source pihole-FTL.conf below
+-GRAVITYDB="${gravityDBfile_default}"
+-gravityDBschema="${piholeGitDir}/advanced/Templates/gravity.db.sql"
+-gravityDBcopy="${piholeGitDir}/advanced/Templates/gravity_copy.sql"
++GDB="$(uci_get pihole @pihole[0] gravitydb)"
++GRAVITYDB="${GDB:-$gravityDBfile_default}"
++gravityDBschema="/usr/lib/pihole/Templates/gravity.db.sql"
++gravityDBcopy="/usr/lib/pihole/Templates/gravity_copy.sql"
+ 
+ domainsExtension="domains"
+ 
+-# Source setupVars from install script
+-setupVars="${piholeDir}/setupVars.conf"
+-if [[ -f "${setupVars}" ]];then
+-  source "${setupVars}"
+-else
+-  echo -e "  ${COL_LIGHT_RED}Installation Failure: ${setupVars} does not exist! ${COL_NC}
+-  Please run 'pihole -r', and choose the 'reconfigure' option to fix."
+-  exit 1
+-fi
+-
+-# Source pihole-FTL from install script
+-pihole_FTL="${piholeDir}/pihole-FTL.conf"
+-if [[ -f "${pihole_FTL}" ]]; then
+-  source "${pihole_FTL}"
+-fi
+-
+-# Set this only after sourcing pihole-FTL.conf as the gravity database path may
+ # have changed
+ gravityDBfile="${GRAVITYDB}"
+ gravityTEMPfile="${GRAVITYDB}_temp"
+ gravityDIR="$(dirname -- "${gravityDBfile}")"
+ gravityOLDfile="${gravityDIR}/gravity_old.db"
+ 
++BLOCKINGMODE="$(uci_get pihole @pihole[0] blockingmode)"
++
+ if [[ -z "${BLOCKINGMODE}" ]] ; then
+   BLOCKINGMODE="NULL"
+ fi
+@@ -313,15 +295,12 @@ migrate_to_database() {
+ 
+ # Determine if DNS resolution is available before proceeding
+ gravity_CheckDNSResolutionAvailable() {
+-  local lookupDomain="pi.hole"
+-
+-  # Determine if $localList does not exist, and ensure it is not empty
+-  if [[ ! -e "${localList}" ]] || [[ -s "${localList}" ]]; then
+-    lookupDomain="raw.githubusercontent.com"
+-  fi
++  local lookupDomain="raw.githubusercontent.com"
++  local cmd="$(command -v getent)"
++  cmd="${cmd:+${cmd##*/} hosts}"
+ 
+   # Determine if $lookupDomain is resolvable
+-  if timeout 4 getent hosts "${lookupDomain}" &> /dev/null; then
++  if timeout 4 ${cmd:-host} "${lookupDomain}" &> /dev/null; then
+     # Print confirmation of resolvability if it had previously failed
+     if [[ -n "${secs:-}" ]]; then
+       echo -e "${OVER}  ${TICK} DNS resolution is now available\\n"
+@@ -356,7 +335,7 @@ gravity_CheckDNSResolutionAvailable() {
+   # Ensure DNS server is given time to be resolvable
+   secs="120"
+   echo -ne "  ${INFO} Time until retry: ${secs}"
+-  until timeout 1 getent hosts "${lookupDomain}" &> /dev/null; do
++  until timeout 1 ${cmd:-host} "${lookupDomain}" &> /dev/null; do
+     [[ "${secs:-}" -eq 0 ]] && break
+     echo -ne "${OVER}  ${INFO} Time until retry: ${secs}"
+     : $((secs--))
+@@ -383,7 +362,7 @@ gravity_DownloadBlocklists() {
+   # Parse source domains from $sources
+   mapfile -t sourceDomains <<< "$(
+     # Logic: Split by folder/port
+-    awk -F '[/:]' '{
++    gawk -F '[/:]' '{
+       # Remove URL protocol & optional username:password@
+       gsub(/(.*:\/\/|.*:.*@)/, "", $0)
+       if(length($1)>0){print $1}
+@@ -506,7 +485,7 @@ gravity_DownloadBlocklists() {
+       lineno="${warning#*:}"
+       if [[ -n "${file}" && -n "${lineno}" ]]; then
+         echo -n "    Line contains: "
+-        awk "NR==${lineno}" < "${file}"
++        gawk "NR==${lineno}" < "${file}"
+       fi
+     done <<< "${output}"
+     echo ""
+@@ -583,7 +562,7 @@ compareLists() {
+ # Download specified URL and perform checks on HTTP status and file content
+ gravity_DownloadBlocklistFromUrl() {
+   local url="${1}" cmd_ext="${2}" agent="${3}" adlistID="${4}" saveLocation="${5}" target="${6}" compression="${7}"
+-  local heisenbergCompensator="" patternBuffer str httpCode success="" ip
++  local heisenbergCompensator="" patternBuffer str httpCode success="" ip dnsserver
+ 
+   # Create temp file to store content on disk instead of RAM
+   patternBuffer=$(mktemp -p "/tmp" --suffix=".phgpb")
+@@ -599,7 +578,7 @@ gravity_DownloadBlocklistFromUrl() {
+   str="Status:"
+   echo -ne "  ${INFO} ${str} Pending..."
+   blocked=false
+-  case $BLOCKINGMODE in
++  case ${BLOCKINGMODE^^} in
+     "IP-NODATA-AAAA"|"IP")
+       # Get IP address of this domain
+       ip="$(dig "${domain}" +short)"
+@@ -622,19 +601,21 @@ gravity_DownloadBlocklistFromUrl() {
+   esac
+ 
+   if [[ "${blocked}" == true ]]; then
+-    printf -v ip_addr "%s" "${PIHOLE_DNS_1%#*}"
+-    if [[ ${PIHOLE_DNS_1} != *"#"* ]]; then
++	dnsserver="$(uci_get dhcp @dnsmasq[0] server)"
++	dnsserver="${dnsserver%% *}"
++    printf -v ip_addr "%s" "${dnsserver%#*}"
++    if [[ ${dnsserver} != *"#"* ]]; then
+       port=53
+     else
+-      printf -v port "%s" "${PIHOLE_DNS_1#*#}"
++      printf -v port "%s" "${dnsserver#*#}"
+     fi
+     ip=$(dig "@${ip_addr}" -p "${port}" +short "${domain}" | tail -1)
+-    if [[ $(echo "${url}" | awk -F '://' '{print $1}') = "https" ]]; then
++    if [[ $(echo "${url}" | gawk -F '://' '{print $1}') = "https" ]]; then
+       port=443;
+     else port=80
+     fi
+-    bad_list=$(pihole -q -adlist "${domain}" | head -n1 | awk -F 'Match found in ' '{print $2}')
+-    echo -e "${OVER}  ${CROSS} ${str} ${domain} is blocked by ${bad_list%:}. Using DNS on ${PIHOLE_DNS_1} to download ${url}";
++    bad_list=$(pihole -q -adlist "${domain}" | head -n1 | gawk -F 'Match found in ' '{print $2}')
++    echo -e "${OVER}  ${CROSS} ${str} ${domain} is blocked by ${bad_list%:}. Using DNS on ${dnsserver} to download ${url}";
+     echo -ne "  ${INFO} ${str} Pending..."
+     cmd_ext="--resolve $domain:$port:$ip $cmd_ext"
+   fi
+@@ -732,8 +713,8 @@ gravity_ParseFileIntoDomains() {
+     # 4) Remove lines containing "/"
+     # 5) Remove leading tabs, spaces, etc.
+     # 6) Delete lines not matching domain names
+-    < "${source}" tr -d '\r' | \
+-    tr '[:upper:]' '[:lower:]' | \
++    < "${source}" /usr/libexec/tr-coreutils -d '\r' | \
++    /usr/libexec/tr-coreutils '[:upper:]' '[:lower:]' | \
+     sed 's/\s*#.*//g' | \
+     sed -r '/(\/).*$/d' | \
+     sed -r 's/^.*\s+//g' | \
+@@ -758,7 +739,7 @@ gravity_ParseFileIntoDomains() {
+     # Scanning for "^IPv4$" is too slow with large (1M) lists on low-end hardware
+     echo -ne "  ${INFO} Format: URL"
+ 
+-    awk '
++    gawk '
+       # Remove URL scheme, optional "username:password@", and ":?/;"
+       # The scheme must be matched carefully to avoid blocking the wrong URL
+       # in cases like:
+@@ -811,18 +793,6 @@ gravity_ShowCount() {
+   gravity_Table_Count "vw_regex_whitelist" "regex whitelist filters"
+ }
+ 
+-# Create "localhost" entries into hosts format
+-gravity_generateLocalList() {
+-  # Empty $localList if it already exists, otherwise, create it
+-  echo "### Do not modify this file, it will be overwritten by pihole -g" > "${localList}"
+-  chmod 644 "${localList}"
+-
+-  # Add additional LAN hosts provided by OpenVPN (if available)
+-  if [[ -f "${VPNList}" ]]; then
+-    awk -F, '{printf $2"\t"$1".vpn\n"}' "${VPNList}" >> "${localList}"
+-  fi
+-}
+-
+ # Trap Ctrl-C
+ gravity_Trap() {
+   trap '{ echo -e "\\n\\n  ${INFO} ${COL_LIGHT_RED}User-abort detected${COL_NC}"; gravity_Cleanup "error"; }' INT
+@@ -999,9 +968,6 @@ fi
+ 
+ gravity_DownloadBlocklists
+ 
+-# Create local.list
+-gravity_generateLocalList
+-
+ # Migrate rest of the data from old to new database
+ if ! gravity_swap_databases; then
+   echo -e "   ${CROSS} Unable to create database. Please contact support."
+--- a/pihole
++++ b/pihole
+@@ -9,20 +9,17 @@
+ # This file is copyright under the latest version of the EUPL.
+ # Please see LICENSE file for your rights under this license.
+ 
+-readonly PI_HOLE_SCRIPT_DIR="/opt/pihole"
++readonly PI_HOLE_SCRIPT_DIR="/usr/lib/pihole"
+ 
+-# setupVars and PI_HOLE_BIN_DIR are not readonly here because in some functions (checkout),
+-# they might get set again when the installer is sourced. This causes an
+-# error due to modifying a readonly variable.
+-setupVars="/etc/pihole/setupVars.conf"
+-PI_HOLE_BIN_DIR="/usr/local/bin"
+-readonly FTL_PID_FILE="/run/pihole-FTL.pid"
++PI_HOLE_BIN_DIR="/usr/bin"
+ 
+ readonly colfile="${PI_HOLE_SCRIPT_DIR}/COL_TABLE"
+ source "${colfile}"
++source /lib/config/uci.sh
+ 
+-readonly utilsfile="${PI_HOLE_SCRIPT_DIR}/utils.sh"
+-source "${utilsfile}"
++FTL_PID_UCI="$(uci_get pihole @pihole[0] pidfile)"
++FTL_PID_DEFAULT="/var/run/pihole/pihole-FTL.pid"
++FTL_PID_FILE="${FTL_PID_UCI:-$FTL_PID_DEFAULT}"
+ 
+ webpageFunc() {
+   source "${PI_HOLE_SCRIPT_DIR}/webpage.sh"
+@@ -62,17 +59,6 @@ arpFunc() {
+   exit 0
+ }
+ 
+-updatePiholeFunc() {
+-  shift
+-  "${PI_HOLE_SCRIPT_DIR}"/update.sh "$@"
+-  exit 0
+-}
+-
+-reconfigurePiholeFunc() {
+-  /etc/.pihole/automated\ install/basic-install.sh --reconfigure
+-  exit 0;
+-}
+-
+ updateGravityFunc() {
+   exec "${PI_HOLE_SCRIPT_DIR}"/gravity.sh "$@"
+ }
+@@ -89,12 +75,6 @@ chronometerFunc() {
+   exit 0
+ }
+ 
+-
+-uninstallFunc() {
+-  "${PI_HOLE_SCRIPT_DIR}"/uninstall.sh
+-  exit 0
+-}
+-
+ versionFunc() {
+   shift
+   exec "${PI_HOLE_SCRIPT_DIR}"/version.sh "$@"
+@@ -152,7 +132,7 @@ restartDNS() {
+     fi
+   else
+     # A full restart has been requested
+-    svc="service pihole-FTL restart"
++    svc="/etc/init.d/pihole-FTL restart"
+     str="Restarting DNS server"
+     icon="${TICK}"
+   fi
+@@ -174,6 +154,7 @@ restartDNS() {
+ }
+ 
+ piholeEnable() {
++  local blocking_enabled="$(uci_get pihole @pihole[0] blocking_enabled)"
+   if [[ "${2}" == "-h" ]] || [[ "${2}" == "--help" ]]; then
+     echo "Usage: pihole disable [time]
+ Example: 'pihole disable', or 'pihole disable 5m'
+@@ -186,7 +167,7 @@ Time:
+ 
+   elif [[ "${1}" == "0" ]]; then
+     # Disable Pi-hole
+-    if grep -cq "BLOCKING_ENABLED=false" "${setupVars}"; then
++    if [ "$blocking_enabled" = "0" ]; then
+       echo -e "  ${INFO} Blocking already disabled, nothing to do"
+       exit 0
+     fi
+@@ -226,21 +207,22 @@ Time:
+       fi
+ 
+       local str="Pi-hole Disabled"
+-      addOrEditKeyValPair "BLOCKING_ENABLED" "false" "${setupVars}"
++      uci_set "pihole" "@pihole[0]" "blocking_enabled" "0"
+     fi
+   else
+     # Enable Pi-hole
+     killall -q pihole-reenable
+-    if grep -cq "BLOCKING_ENABLED=true" "${setupVars}"; then
++    if [ "$blocking_enabled" = "1" ]; then
+       echo -e "  ${INFO} Blocking already enabled, nothing to do"
+       exit 0
+     fi
+     echo -e "  ${INFO} Enabling blocking"
+     local str="Pi-hole Enabled"
+ 
+-    addOrEditKeyValPair "BLOCKING_ENABLED" "true" "${setupVars}"
++    uci_set "pihole" "@pihole[0]" "blocking_enabled" "1"
+   fi
+ 
++  uci_commit pihole
+   restartDNS reload-lists
+ 
+   echo -e "${OVER}  ${TICK} ${str}"
+@@ -260,8 +242,7 @@ Options:
+     exit 0
+   elif [[ "${1}" == "off" ]]; then
+     # Disable logging
+-    sed -i 's/^log-queries/#log-queries/' /etc/dnsmasq.d/01-pihole.conf
+-    addOrEditKeyValPair "QUERY_LOGGING" "false" "${setupVars}"
++    uci_remove "pihole" "@pihole[0]" "logqueries"
+     if [[ "${2}" != "noflush" ]]; then
+       # Flush logs
+       "${PI_HOLE_BIN_DIR}"/pihole -f
+@@ -270,8 +251,7 @@ Options:
+     local str="Logging has been disabled!"
+   elif [[ "${1}" == "on" ]]; then
+     # Enable logging
+-    sed -i 's/^#log-queries/log-queries/' /etc/dnsmasq.d/01-pihole.conf
+-    addOrEditKeyValPair "QUERY_LOGGING" "true" "${setupVars}"
++    uci_set "pihole" "@pihole[0]" "logqueries" "1"
+     echo -e "  ${INFO} Enabling logging..."
+     local str="Logging has been enabled!"
+   else
+@@ -279,34 +259,46 @@ Options:
+   Try 'pihole logging --help' for more information."
+     exit 1
+   fi
++  uci_commit pihole
+   restartDNS
+   echo -e "${OVER}  ${TICK} ${str}"
+ }
+ 
+ analyze_ports() {
+-  local lv4 lv6 port=${1}
++  source "/usr/lib/pihole/basic-install.sh"
++  local port=${1} udp4=0 udp6=0 tcp4=0 tcp6=0
+   # FTL is listening at least on at least one port when this
+   # function is getting called
+   # Check individual address family/protocol combinations
+   # For a healthy Pi-hole, they should all be up (nothing printed)
+-  lv4="$(ss --ipv4 --listening --numeric --tcp --udp src :${port})"
+-  if grep -q "udp " <<< "${lv4}"; then
++  for f in $(netstat -tupln | grep -E "udp.*:${port}.*pihole-FTL" | awk '{print $4}' | sed 's/.\{3\}$//')
++  do
++    valid_ip $f && udp4=1
++    valid_ip6 $f && udp6=1
++  done
++
++  for f in $(netstat -tupln | grep -E "tcp.*:${port}.*pihole-FTL" | awk '{print $4}' | sed 's/.\{3\}$//')
++  do
++    valid_ip $f && tcp4=1
++    valid_ip6 $f && tcp6=1
++  done
++
++  if [[ ${udp4} -eq 1 ]]; then
+       echo -e "     ${TICK} UDP (IPv4)"
+   else
+       echo -e "     ${CROSS} UDP (IPv4)"
+   fi
+-  if grep -q "tcp " <<< "${lv4}"; then
++  if [[ ${tcp4} -eq 1 ]]; then
+       echo -e "     ${TICK} TCP (IPv4)"
+   else
+       echo -e "     ${CROSS} TCP (IPv4)"
+   fi
+-  lv6="$(ss --ipv6 --listening --numeric --tcp --udp src :${port})"
+-  if grep -q "udp " <<< "${lv6}"; then
++  if [[ ${udp6} -eq 1 ]]; then
+       echo -e "     ${TICK} UDP (IPv6)"
+   else
+       echo -e "     ${CROSS} UDP (IPv6)"
+   fi
+-  if grep -q "tcp " <<< "${lv6}"; then
++  if [[ ${tcp6} -eq 1 ]]; then
+       echo -e "     ${TICK} TCP (IPv6)"
+   else
+       echo -e "     ${CROSS} TCP (IPv6)"
+@@ -317,6 +309,7 @@ analyze_ports() {
+ statusFunc() {
+   # Determine if there is pihole-FTL service is listening
+   local listening pid port
++  local blocking_enabled="$(uci_get pihole @pihole[0] blocking_enabled)"
+ 
+   pid="$(getFTLPID)"
+   if [[ "$pid" -eq "-1" ]]; then
+@@ -343,13 +336,13 @@ statusFunc() {
+   fi
+ 
+   # Determine if Pi-hole's blocking is enabled
+-  if grep -q "BLOCKING_ENABLED=false" /etc/pihole/setupVars.conf; then
++  if [ "$blocking_enabled" = "0" ]; then
+     # A config is commented out
+     case "${1}" in
+       "web") echo 0;;
+       *) echo -e "  ${CROSS} Pi-hole blocking is disabled";;
+     esac
+-  elif grep -q "BLOCKING_ENABLED=true" /etc/pihole/setupVars.conf;  then
++  elif [ "$blocking_enabled" = "1" ]; then
+     # Configs are set
+     case "${1}" in
+       "web") echo "$port";;
+@@ -389,55 +382,6 @@ tailFunc() {
+   exit 0
+ }
+ 
+-piholeCheckoutFunc() {
+-  if [[ "$2" == "-h" ]] || [[ "$2" == "--help" ]]; then
+-    echo "Usage: pihole checkout [repo] [branch]
+-Example: 'pihole checkout master' or 'pihole checkout core dev'
+-Switch Pi-hole subsystems to a different GitHub branch
+-
+-Repositories:
+-  core [branch]       Change the branch of Pi-hole's core subsystem
+-  web [branch]        Change the branch of Web Interface subsystem
+-  ftl [branch]        Change the branch of Pi-hole's FTL subsystem
+-
+-Branches:
+-  master              Update subsystems to the latest stable release
+-  dev                 Update subsystems to the latest development release
+-  branchname          Update subsystems to the specified branchname"
+-    exit 0
+-  fi
+-
+-  source "${PI_HOLE_SCRIPT_DIR}"/piholeCheckout.sh
+-  shift
+-  checkout "$@"
+-}
+-
+-tricorderFunc() {
+-  local tricorder_token
+-  if [[ ! -p "/dev/stdin" ]]; then
+-    echo -e "  ${INFO} Please do not call Tricorder directly"
+-    exit 1
+-  fi
+-
+-  tricorder_token=$(curl --silent --fail --show-error --upload-file "-" https://tricorder.pi-hole.net/upload < /dev/stdin 2>&1)
+-  if [[ "${tricorder_token}" != "https://tricorder.pi-hole.net/"* ]]; then
+-      echo -e "${CROSS} uploading failed, contact Pi-hole support for assistance."
+-      # Log curl error (if available)
+-      if [ -n "${tricorder_token}" ]; then
+-          echo -e "${INFO} Error message: ${COL_RED}${tricorder_token}${COL_NC}\\n"
+-          tricorder_token=""
+-      fi
+-      exit 1
+-  fi
+-  echo "Upload successful, your token is: ${COL_GREEN}${tricorder_token}${COL_NC}"
+-  exit 0
+-}
+-
+-updateCheckFunc() {
+-  "${PI_HOLE_SCRIPT_DIR}"/updatecheck.sh "$@"
+-  exit 0
+-}
+-
+ helpFunc() {
+   echo "Usage: pihole [options]
+ Example: 'pihole -w -h'
+@@ -454,9 +398,7 @@ Whitelist/Blacklist Options:
+ 
+ Debugging Options:
+   -d, debug           Start a debugging session
+-                        Add '-a' to automatically upload the log to tricorder.pi-hole.net
+   -f, flush           Flush the Pi-hole log
+-  -r, reconfigure     Reconfigure or Repair Pi-hole subsystems
+   -t, tail [arg]      View the live output of the Pi-hole log.
+                       Add an optional argument to filter the log
+                       (regular expressions are supported)
+@@ -473,11 +415,8 @@ Options:
+                         Add '-h' for more info on logging usage
+   -q, query           Query the adlists for a specified domain
+                         Add '-h' for more info on query usage
+-  -up, updatePihole   Update Pi-hole subsystems
+-                        Add '--check-only' to exit script before update is performed.
+   -v, version         Show installed versions of Pi-hole, Web Interface & FTL
+                         Add '-h' for more info on version usage
+-  uninstall           Uninstall Pi-hole from your system
+   status              Display the running status of Pi-hole subsystems
+   enable              Enable Pi-hole subsystems
+   disable             Disable Pi-hole subsystems
+@@ -485,8 +424,6 @@ Options:
+   restartdns          Full restart Pi-hole subsystems
+                         Add 'reload' to update the lists and flush the cache without restarting the DNS server
+                         Add 'reload-lists' to only update the lists WITHOUT flushing the cache or restarting the DNS server
+-  checkout            Switch Pi-hole subsystems to a different GitHub branch
+-                        Add '-h' for more info on checkout usage
+   arpflush            Flush information stored in Pi-hole's network tables";
+   exit 0
+ }
+@@ -520,24 +457,18 @@ case "${1}" in
+   "--white-wild" | "white-wild"   ) listFunc "$@";;
+   "-d" | "debug"                ) debugFunc "$@";;
+   "-f" | "flush"                ) flushFunc "$@";;
+-  "-up" | "updatePihole"        ) updatePiholeFunc "$@";;
+-  "-r"  | "reconfigure"         ) reconfigurePiholeFunc;;
+   "-g" | "updateGravity"        ) updateGravityFunc "$@";;
+   "-c" | "chronometer"          ) chronometerFunc "$@";;
+   "-h" | "help"                 ) helpFunc;;
+   "-v" | "version"              ) versionFunc "$@";;
+   "-q" | "query"                ) queryFunc "$@";;
+   "-l" | "logging"              ) piholeLogging "$@";;
+-  "uninstall"                   ) uninstallFunc;;
+   "enable"                      ) piholeEnable 1;;
+   "disable"                     ) piholeEnable 0 "$2";;
+   "status"                      ) statusFunc "$2";;
+   "restartdns"                  ) restartDNS "$2";;
+   "-a" | "admin"                ) webpageFunc "$@";;
+   "-t" | "tail"                 ) tailFunc "$2";;
+-  "checkout"                    ) piholeCheckoutFunc "$@";;
+-  "tricorder"                   ) tricorderFunc;;
+-  "updatechecker"               ) updateCheckFunc "$@";;
+   "arpflush"                    ) arpFunc "$@";;
+   *                             ) helpFunc;;
+ esac

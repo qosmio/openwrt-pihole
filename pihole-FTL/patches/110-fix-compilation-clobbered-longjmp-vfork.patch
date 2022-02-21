@@ -1,0 +1,21 @@
+--- a/src/dnsmasq/option.c
++++ b/src/dnsmasq/option.c
+@@ -4979,15 +4979,15 @@ err:
+   return 1;
+ }
+ 
+-static void read_file(char *file, FILE *f, int hard_opt)	
++static void read_file(char *file, FILE *f, volatile int hard_opt)	
+ {
+   volatile int lineno = 0;
+   char *buff = daemon->namebuff;
+   
+   while (fgets(buff, MAXDNAME, f))
+     {
+-      int white, i, script = 0;
+-      volatile int option;
++      int white, i;
++      volatile int option, script = 0;
+       char *errmess, *p, *arg, *start;
+       size_t len;
+ 

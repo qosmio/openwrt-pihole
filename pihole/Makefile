@@ -1,0 +1,95 @@
+include $(TOPDIR)/rules.mk
+
+PKG_NAME:=pihole
+PKG_VERSION:=5.9
+PKG_RELEASE:=2
+
+PKG_SOURCE_URL:=https://codeload.github.com/pi-hole/pi-hole/tar.gz/v$(PKG_VERSION)?
+PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
+PKG_HASH:=13e7c3d7cdf19c9b9b8a449fea86d55ef68fce9b67ee3ad0429104c0ff509dde
+PKG_BUILD_DIR:=$(BUILD_DIR)/pi-hole-$(PKG_VERSION)
+
+PKG_LICENSE:=EUPL
+PKG_LICENSE_FILES:=LICENSE
+
+include $(INCLUDE_DIR)/package.mk
+
+define Package/pihole
+  SECTION:=regae
+  CATEGORY:=regae
+  TITLE:=A black hole for Internet advertisements
+  URL:=https://pi-hole.net/
+  DEPENDS:=+bash +grep +bind-dig +bind-host +gawk +ca-bundle +coreutils +coreutils-nohup +coreutils-sha1sum +coreutils-sort +coreutils-stat +coreutils-tr +coreutils-df +coreutils-timeout +coreutils-mktemp +idn2 +sed +coreutils-kill +curl +@CONFIG_LIBCURL_ZLIB
+endef
+
+define Package/pihole/description
+  The Pi-hole® is a DNS sinkhole that protects your devices from unwanted content, without installing any client-side software.
+endef
+
+define Build/Compile
+endef
+
+define Package/pihole/install
+	$(INSTALL_DIR) $(1)/usr/bin
+ifdef CONFIG_USE_GLIBC
+	$(INSTALL_BIN) $(TOOLCHAIN_DIR)/bin/getent $(1)/usr/bin/
+endif
+	$(INSTALL_BIN) $(PKG_BUILD_DIR)/pihole $(1)/usr/bin/
+	$(INSTALL_DIR) $(1)/usr/lib/pihole
+	$(INSTALL_BIN) $(PKG_BUILD_DIR)/gravity.sh $(1)/usr/lib/pihole/
+	$(INSTALL_DIR) $(1)/etc/pihole
+	
+	$(INSTALL_BIN) $(PKG_BUILD_DIR)/advanced/Scripts/version.sh $(1)/usr/lib/pihole/
+	$(INSTALL_BIN) $(PKG_BUILD_DIR)/advanced/Scripts/piholeLogFlush.sh $(1)/usr/lib/pihole/
+	$(INSTALL_BIN) $(PKG_BUILD_DIR)/advanced/Scripts/chronometer.sh $(1)/usr/lib/pihole/
+	$(INSTALL_BIN) $(PKG_BUILD_DIR)/advanced/Scripts/list.sh $(1)/usr/lib/pihole/
+	$(INSTALL_BIN) $(PKG_BUILD_DIR)/advanced/Scripts/webpage.sh $(1)/usr/lib/pihole/
+	$(INSTALL_BIN) $(PKG_BUILD_DIR)/advanced/Scripts/query.sh $(1)/usr/lib/pihole/
+	$(INSTALL_BIN) $(PKG_BUILD_DIR)/advanced/Scripts/pihole-reenable.sh $(1)/usr/lib/pihole/
+	$(INSTALL_BIN) $(PKG_BUILD_DIR)/advanced/Scripts/piholeARPTable.sh $(1)/usr/lib/pihole/
+
+	$(INSTALL_BIN) $(PKG_BUILD_DIR)/advanced/Scripts/COL_TABLE $(1)/usr/lib/pihole/
+
+	$(INSTALL_DIR) $(1)/usr/lib/pihole/Templates
+	$(INSTALL_BIN) $(PKG_BUILD_DIR)/advanced/Templates/gravity.db.sql $(1)/usr/lib/pihole/Templates/
+	$(INSTALL_BIN) $(PKG_BUILD_DIR)/advanced/Templates/gravity_copy.sql $(1)/usr/lib/pihole/Templates/
+
+	$(INSTALL_DATA) ./files/basic-install.sh $(1)/usr/lib/pihole/
+
+	$(CP) -pr $(PKG_BUILD_DIR)/advanced/Scripts/database_migration $(1)/usr/lib/pihole/
+
+	$(INSTALL_DATA) ./files/dns-servers.conf $(1)/etc/pihole/
+endef
+
+define Package/pihole/postinst
+#!/usr/bin/env bash
+# check if we are on real system
+if [ -z "$${IPKG_INSTROOT}" ]; then
+	echo "Installing cron rules"
+	grep -q "pihole updateGravity" /etc/crontabs/root 2> /dev/null ||
+		echo "$$((1 + RANDOM % 58)) $$((3 + RANDOM % 2)) * * 6 /usr/bin/pihole updateGravity" >> /etc/crontabs/root
+	
+        echo "Restarting cron"
+        /etc/init.d/cron restart
+
+	echo "Downloading and compiling the aggregated block list"
+	/usr/lib/pihole/gravity.sh --force
+fi
+exit 0
+endef
+
+define Package/pihole/prerm
+#!/usr/bin/env bash
+# check if we are on real system
+if [ -z "$${IPKG_INSTROOT}" ]; then
+	echo "Removing cron rules"
+	grep -q "pihole updateGravity" /etc/crontabs/root 2> /dev/null &&
+		sed -i "/pihole updateGravity/d" /etc/crontabs/root
+
+        echo "Restarting cron"
+        /etc/init.d/cron restart
+fi
+exit 0
+endef
+
+$(eval $(call BuildPackage,pihole))
